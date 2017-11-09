@@ -47,12 +47,12 @@ private:
   void init_constant_memory(std::vector<int32_t>& delta, std::vector<uint32_t> &masks, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId);
 
 public:
-  Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_h, param_t pad_w, param_t pad_d, param_t stride_h, param_t stride_w, param_t stride_d,
+  Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_h, param_t pad_w, param_t pad_d, param_t stride_h, param_t stride_w, param_t stride_d, bool thresholding,
        param_t vec, param_t bpqn, param_t bk, param_t pqns, param_t ks, param_t crs_l, param_t cs, param_t bc, param_t gridc);
   // Execution
   std::string dump(driver::Device const & device, std::string const & name);
   std::vector<param_t> tuning_params() const;
-  void enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O);
+  void enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O, const driver::Buffer *thresholds = NULL);
   // Validity
   static void output_shapes(param_t D, param_t H, param_t W, param_t T, param_t R, param_t S, param_t pad_d,
                             param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t& M,
@@ -102,6 +102,8 @@ private:
   // constant memory
   std::vector<int32_t> cLUT;
   std::vector<uint32_t> masks_;
+  //
+  bool thresholding_;
 };
 
 }

@@ -56,7 +56,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
           DType dtype, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t C, param_t T, param_t R, param_t S,
           param_t D, param_t H, param_t W, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
           scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O,
-          templates::Conv* generator)
+          driver::Buffer const * thresholds, templates::Conv* generator)
 {
   typedef std::tuple<driver::Stream*, DType, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t,
                      param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t> key_type;
@@ -67,7 +67,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
     DType dtype;
     param_t C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w;
     std::tie(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w) = key;
-    templates::Conv result = profile->predict(*stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w);
+    templates::Conv result = profile->predict(*stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, thresholds!=NULL);
     return std::make_shared<templates::Conv>(result);
   });
 
@@ -82,7 +82,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
   if(generator == NULL)
     generator = inference.get(key_type(&stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)).get();
 
-  generator->enqueue(*kernels.get(generator), stream,  alpha, I, F, beta, O);
+  generator->enqueue(*kernels.get(generator), stream,  alpha, I, F, beta, O, thresholds);
 }
 
 

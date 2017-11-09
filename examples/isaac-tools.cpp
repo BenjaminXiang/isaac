@@ -288,7 +288,7 @@ void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::driver::Buffer F(ctx, K*C*T*R*S*dtsize);
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O, NULL, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
   if(sc::driver::dispatch::cudnninit())
     times.push_back(bench([&](){ sc::driver::cudnnConv(dtype, stream, D, H, W, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
   print_results(times, {str(N), str(K), str(M), str(P), str(Q), str(C), str(T), str(R), str(S)}, metric.cmp(), [&](double tsec){ return metric.conv(M, P, Q, K, N, C, T, R, S, tsec);});
@@ -355,6 +355,7 @@ void loop_nest(std::vector<std::vector<T>> const & iterates, std::function<void(
 
 
 void search_conv(int32_t W, int32_t H, int32_t C, int32_t N, int32_t K, int32_t R, int32_t S, int32_t pad_h, int32_t pad_w, int32_t stride_h, int32_t stride_w, sc::DType dtype){
+  bool thresholding = false;
   auto ctx = drv::backend::contexts::get_default();
   size_t dtsize = sc::size_of(dtype);
 
@@ -378,13 +379,13 @@ void search_conv(int32_t W, int32_t H, int32_t C, int32_t N, int32_t K, int32_t 
   std::vector<sc::param_t> rs = {4, 8, 16};
   double best;
   loop_nest<sc::param_t>({rv, rl, rl, rs, rs, rl, rl, r1, rr, rr}, [&](std::vector<sc::param_t> const & x){
-    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, thresholding, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     try{
       std::string src = generator.dump(ctx.device(), "conv");
       drv::Module program(ctx, src);
       drv::Kernel kernel(program, "conv");
-      double tsec = bench([&](){ generator.enqueue(kernel, stream, alpha, I, F, beta, O); }, [&](){ stream.synchronize(); }, ctx.device());
+      double tsec = bench([&](){ generator.enqueue(kernel, stream, alpha, I, F, beta, O, NULL); }, [&](){ stream.synchronize(); }, ctx.device());
       double tflops = sc::templates::Conv::tflops(P,Q,M,K,N,C,R,S,T,tsec);
       best = std::max(tflops, best);
       std::cout << "//";
@@ -560,16 +561,16 @@ int main(int argc, char* argv[]){
     param_t D = x[0], H = x[1], W = x[2], C = x[3], N = x[4], K = x[5], T = x[6], R = x[7], S = x[8], pad_d = x[9], pad_h = x[10], pad_w = x[11], stride_d = x[12], stride_h = x[13], stride_w = x[14];
     param_t M, P, Q;
     sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
-
+    bool thresholding = false;
     if(options->has("search"))
       search_conv(W, H, C, N, K, R, S, pad_h, pad_w, stride_h, stride_w, dtype);
     if(conv->has("kernel")){
       auto x = conv->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
+      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, thresholding, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
     }
     else{
       sc::runtime::ConvProfile* profile = (sc::runtime::ConvProfile*)sc::runtime::database.at({device.architecture(), sc::runtime::CONV}).get();
-      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)));
+      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, thresholding)));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);

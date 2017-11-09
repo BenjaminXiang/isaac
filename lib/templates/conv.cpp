@@ -49,14 +49,13 @@ const size_t Conv::Nshapes = 5;
 const size_t Conv::Ntune = 9;
 const size_t Conv::Nparams = Nshapes + Ntune;
 
-Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, bool thresholding,
      param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
   dtype_(dtype), C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
   stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
-  vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(gridz)
+  vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(gridz), thresholding_(thresholding)
 {
-//    std::cout << vec << " " << bc0 << " " << bc1 << " " << cs0 << " " << cs1 << std::endl;
     // Resize LUT
     size_t block = u_*zs_*bz_;
     size_t Nfilt = T_*R_*S_;
@@ -489,7 +488,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _strideOk, .param .b32 _strideOm, .param .b32 _strideOp, .param .b32 _strideOq, .param .b32 _strideOn, " << std::endl
       << "            .param .b32 _strideFk, .param .b32 _strideFc, .param .b32 _strideFs, " << std::endl
       << "            .param .b64 _bias," << std::endl
-      << "            .param .b32 _bound)" << std::endl;
+      << "            .param .b32 _bound" << std::endl
+      << "           " << (thresholding_?", .param .b64 _pthresh":"") << ")" << std::endl;
   iss << "{" << std::endl;
   // Predicates
   iss << "  .reg.pred %in_bounds, %predcrs, %predloop, %predz, %predlut;" << std::endl;
@@ -596,7 +596,12 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   // Bias
   iss << format("  .reg .{} %rbias<{}>;", dtype, cs1_) << std::endl;
   iss << format("  .reg .pred %has_bias;") << std::endl;
-
+  // Threhsolding
+  if(thresholding_){
+    iss << "  .reg .pred %stop;" << std::endl;
+    iss << "  .reg .b64 %pthresh;" << std::endl;
+    iss << format("  .reg .b32 %minact, %maxthresh, %threshold<{}>;", cs1_) << std::endl;
+  }
   iss << std::endl;
   iss << "  /* Initialize O */" << std::endl;
   for(size_t c = 0; c < zs_; c++)
@@ -607,9 +612,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
 
   iss << "  // Load Param" << std::endl;
-  iss << format("  ld.param.u64 %pc, [_po];") << std::endl;
-  iss << format("  ld.param.u64 %pi, [_pi];") << std::endl;
-  iss << format("  ld.param.u64 %pf, [_pf];") << std::endl;
+  iss << "  ld.param.u64 %pc, [_po];" << std::endl;
+  iss << "  ld.param.u64 %pi, [_pi];" << std::endl;
+  iss << "  ld.param.u64 %pf, [_pf];" << std::endl;
+  if(thresholding_)
+    iss << "  ld.param.u64 %pthresh, [_pthresh];" << std::endl;
   iss << "  ld.param.s32 %K, [_K];" << std::endl;
   iss << "  ld.param.s32 %C, [_C];" << std::endl;
   iss << "  ld.param.s32 %D, [_D];" << std::endl;
@@ -711,6 +718,20 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  // LDG lanes") << std::endl;
   ptr_ldg_i();
   ptr_ldg_f();
+  if(thresholding_){
+    iss << format("  mad.lo.s32 %offc1, %bid1, {}, 0;", cl1) << std::endl;
+    iss << format("  mad.lo.s32  %offc1, %id1, {}, %offc1;", vec_) << std::endl;
+    iss << format("  mad.wide.u32 %pthresh, %offc1, {}, %pthresh;", dtsize) << std::endl;
+    for(size_t j = 0; j < cs1_; j+= vec_)
+    for(size_t s = 0; s < vec_; s++)
+      iss << format("  ld.global.b32 %threshold{}, [%pthresh + {}];", j + s, dtsize*(j*bc1_ + s)) << std::endl;
+
+    iss << "  mov.f32 %maxthresh, %threshold0;" << std::endl;
+    for(size_t j = 0; j < cs1_; j+= vec_)
+    for(size_t s = 0; s < vec_; s++)
+      if(j + s > 0)
+        iss << format("  max.f32 %maxthresh, %threshold{}, %maxthresh;", j + s) << std::endl;
+  }
 
   iss << "  // Bounds" << std::endl;
   iss << format("  mul.lo.s32 %CTRS, %C, %Nfilt;") << std::endl;
@@ -740,7 +761,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << " //Main loop" << std::endl;
   iss << "LOOP:" << std::endl;
-  iss << "  bar.sync 0;" << std::endl;
+  if(!thresholding_)
+    iss << "  bar.sync 0;" << std::endl;
   for(size_t c = 0; c < u_; c+=us_){
     //Load I to registers
     for(size_t cc = 0 ; cc < us_ ; ++cc)
@@ -751,6 +773,16 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     //FFMA
     for(size_t cc = 0 ; cc < us_ ; ++cc)
       fma(cc);
+  }
+  if(thresholding_)
+  {
+    iss << format("  mov.f32 %minact, %rc0_{1}_{2}{3};", compute_dtype, 0, 0, vs[0]) << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s)
+      if(i + s + j > 0)
+        iss << format("  min.f32 %minact, %minact, %rc0_{1}_{2}{3};", compute_dtype, i, j, vs[s]) << std::endl;
+    iss << format("  setp.gt.f32 %stop, %minact, %maxthresh;") << std::endl;
   }
 
   // Increment pointers
@@ -774,7 +806,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   // Filters
   iss << format("  sub.s32 %CTRS, %CTRS, {};", block) << std::endl;
   iss << format("  setp.lt.s32 %predcrs, %idctrs, %CTRS;") << std::endl;
-  iss << format("  setp.gt.s32 %predloop, %CTRS, %bound;") << std::endl;
+  if(thresholding_)
+    iss << format("  setp.gt.and.s32 %predloop, %CTRS, %bound, !%stop;") << std::endl;
+  else
+    iss << format("  setp.gt.s32 %predloop, %CTRS, %bound;") << std::endl;
   // Images
   iss << format("  ld.const.b32 %incmask, [%pincmask];") << std::endl;
   iss << format("  add.s32 %pincmask, %pincmask, %incmask;") << std::endl;
@@ -797,7 +832,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   ldg_f(false);
   iss << format("  @%predloop bra.uni LOOP;") << std::endl;
   iss << std::endl;
-  iss << format("  setp.gt.s32 %predloop, %CTRS, 0;") << std::endl;
+  if(thresholding_)
+    iss << format("  setp.gt.and.s32 %predloop, %CTRS, 0, !%stop;") << std::endl;
+  else
+    iss << format("  setp.gt.s32 %predloop, %CTRS, 0;") << std::endl;
   iss << format("  @!%predloop bra.uni ENDLOOP;") << std::endl;
 
   iss << "LAST_ITER:" << std::endl;
@@ -934,7 +972,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   return iss.str();
 }
 
-void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O){
+void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O, driver::Buffer const * thresholds){
   // Data-type size
   int32_t dtsize = size_of(dtype_);
 
@@ -1032,6 +1070,9 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, scalar const 
   kernel.setArg(36, (uint64_t)0);
   // Misc.
   kernel.setArg(37, bound);
+  assert(thresholding_ && thresholds || !thresholding_ && !thresholds);
+  if(thresholding_)
+    kernel.setArg(38, *thresholds);
   if(gridz_>1)
     O.set_zero(stream, N_*K_*M_*P_*Q_*dtsize);
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});

@@ -63,6 +63,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   size_t dtsize = sc::size_of(dtype);
 
   //alpha, beta are not half-precision
+  bool thresholding = false;
   sc::DType ab_dtype = dtype;
   if(ab_dtype != sc::DOUBLE_TYPE)
     ab_dtype = sc::FLOAT_TYPE;
@@ -76,12 +77,17 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<DTYPE> iO(N*K*P*Q*M);
   std::vector<DTYPE> iI(N*C*H*W*D);
   std::vector<DTYPE> iF(K*C*R*S*T);
+  std::vector<DTYPE> iThresh(K);
+
   drv::Buffer O(ctx, iO.size()*dtsize);
   drv::Buffer I(ctx, iI.size()*dtsize);
   drv::Buffer F(ctx, iF.size()*dtsize);
+  drv::Buffer Thresh(ctx, iThresh.size()*dtsize);
+
   srand(0);
   for(size_t i = 0; i < iI.size(); ++i) iI[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < iF.size(); ++i) iF[i] = (float)rand()/RAND_MAX;
+  for(size_t i = 0; i < iThresh.size(); ++i) iF[i] = 200;
   std::vector<DTYPE> iF_cudnn(iF.size());
   to_cudnn(iF, iF_cudnn, C, T, R, S, K);
 
@@ -96,9 +102,10 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.write(O, true, 0, iO.size()*dtsize, iO.data());
   stream.write(I, true, 0, iI.size()*dtsize, iI.data());
   stream.write(F, true, 0, iF.size()*dtsize, iF.data());
+  stream.write(Thresh, true, 0, iThresh.size()*dtsize, iThresh.data());
 
   //Test ISAAC
-  sc::CONV(ctx.device(), stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O);
+  sc::CONV(ctx.device(), stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O, &Thresh);
   stream.read(O, true, 0, iO.size()*dtsize, (void*)iO.data());
   if(!is_correct(iO, rO, max_rounding_error(DTYPE(C))))
     exit(EXIT_FAILURE);
@@ -109,7 +116,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<int> rgrid = {1, 8};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rs, rs, rl, r1, rgrid, rgrid})){
-    isaac::templates::Conv conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+    isaac::templates::Conv conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, thresholding,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     std::string src;
