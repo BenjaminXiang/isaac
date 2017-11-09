@@ -761,7 +761,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << " //Main loop" << std::endl;
   iss << "LOOP:" << std::endl;
-  if(!thresholding_)
+//  if(!thresholding_)
     iss << "  bar.sync 0;" << std::endl;
   for(size_t c = 0; c < u_; c+=us_){
     //Load I to registers

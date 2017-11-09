@@ -87,7 +87,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   srand(0);
   for(size_t i = 0; i < iI.size(); ++i) iI[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < iF.size(); ++i) iF[i] = (float)rand()/RAND_MAX;
-  for(size_t i = 0; i < iThresh.size(); ++i) iF[i] = 200;
+  for(size_t i = 0; i < iThresh.size(); ++i) iThresh[i] = 10000;
   std::vector<DTYPE> iF_cudnn(iF.size());
   to_cudnn(iF, iF_cudnn, C, T, R, S, K);
 

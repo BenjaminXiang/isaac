@@ -22,6 +22,7 @@ REGISTER_OP("Conv")
     .Attr("T: {float}")
     .Input("input: T")
     .Input("filter: T")
+    .Input("thresholds: T")
     .Attr("strides: list(int)")
     .Attr("data_format: string")
     .Attr("padding:  string")
@@ -36,9 +37,12 @@ class ConvOp : public OpKernel {
     GPUDevice device =  context->eigen_device<GPUDevice>();
     drv::Stream stream(device.stream(), false);
     isaac::DType dtype = isaac::FLOAT_TYPE;
+    Padding pad = SAME;
+    TensorFormat data_format = FORMAT_NCHW;
 
     const Tensor& inputs = context->input(0);
     const Tensor& filter = context->input(1);
+    const Tensor& thresholds = context->input(2);
 
 
     const int64 N = inputs.dim_size(0);
@@ -53,7 +57,10 @@ class ConvOp : public OpKernel {
     const int64 S = filter.dim_size(2);
     const int64 K = filter.dim_size(3);
 
+    const int64 Kt = thresholds.dim_size(0);
+
     assert(Ci == Cf);
+    assert(K == Kt);
     const int64_t C = Ci;
 
     const int64 stride_d = 1;
@@ -61,8 +68,6 @@ class ConvOp : public OpKernel {
     const int64 stride_w = 1;
     int64 M = 1, P, Q, pad_d, pad_h, pad_w;
 
-    Padding pad = SAME;
-    TensorFormat data_format = FORMAT_NCHW;
     GetWindowedOutputSize(M, T, stride_d, pad, &M, &pad_d);
     GetWindowedOutputSize(H, R, stride_h, pad, &P, &pad_h);
     GetWindowedOutputSize(W, S, stride_w, pad, &Q, &pad_w);
@@ -78,9 +83,10 @@ class ConvOp : public OpKernel {
     isaac::driver::Buffer I(stream.context(), (CUdeviceptr)inputs.flat<float>().data(), false);
     isaac::driver::Buffer F(stream.context(), (CUdeviceptr)filter.flat<float>().data(), false);
     isaac::driver::Buffer O(stream.context(), (CUdeviceptr)output->flat<float>().data(), false);
+    isaac::driver::Buffer Thresholds(stream.context(), (CUdeviceptr)thresholds.flat<float>().data(), false);
 
     isaac::CONV(stream.context().device(), stream, dtype,
-                N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O);
+                N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O, &Thresholds);
   }
 
 };

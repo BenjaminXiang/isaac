@@ -71,7 +71,7 @@ void export_templates(py::module&& m){
 
 
   py::class_<tpt::Conv>(m, "Conv")
-      .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
+      .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t, bool,
                     param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t, param_t, param_t, param_t, param_t, param_t>())
       .def("dump", &tpt::Conv::dump)
       .def("enqueue", &tpt::Conv::enqueue)
