@@ -32,4 +32,8 @@ z_sc = sess.run(y_sc, feed_dict={A: A_in, filters_isaac: np.transpose(filters_in
 error = np.linalg.norm(z_tf - z_sc)/np.max(z_tf)
 print(z_tf.flatten()[0], z_sc.flatten()[0])
 print('Relative error:', error)
+z_sc = sess.run(y_sc, feed_dict={A: A_in, filters_isaac: np.transpose(filters_in, [2,0,1,3]), thresholds: thresholds_in})
+error = np.linalg.norm(z_tf - z_sc)/np.max(z_tf)
+print(z_tf.flatten()[0], z_sc.flatten()[0])
+print('Relative error:', error)
 #print(z_tf - z_sc)

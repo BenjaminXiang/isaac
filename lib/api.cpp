@@ -58,16 +58,17 @@ void CONV(driver::Device const & device, driver::Stream & stream,
           scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O,
           driver::Buffer const * thresholds, templates::Conv* generator)
 {
-  typedef std::tuple<driver::Stream*, DType, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t,
+  typedef std::tuple<CUstream, DType, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t,
                      param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t> key_type;
   // Build the generator if necessary
   static cpp::CachedMap<key_type, std::shared_ptr<templates::Conv>> inference([&](key_type const & key){
     runtime::ConvProfile* profile = (runtime::ConvProfile*)runtime::database.at({device.architecture(), runtime::CONV}).get();
-    driver::Stream* stream;
+    CUstream custream;
     DType dtype;
     param_t C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w;
-    std::tie(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w) = key;
-    templates::Conv result = profile->predict(*stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, thresholds!=NULL);
+    std::tie(custream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w) = key;
+    driver::Stream stream(custream, false);
+    templates::Conv result = profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, thresholds!=NULL);
     return std::make_shared<templates::Conv>(result);
   });
 
@@ -80,7 +81,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
-    generator = inference.get(key_type(&stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)).get();
+    generator = inference.get(key_type(*stream.cu(), dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)).get();
 
   generator->enqueue(*kernels.get(generator), stream,  alpha, I, F, beta, O, thresholds);
 }
