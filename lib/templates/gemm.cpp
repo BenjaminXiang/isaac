@@ -787,7 +787,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   }
   iss << "}" << std::endl;
 
-
   return iss.str();
 }
 

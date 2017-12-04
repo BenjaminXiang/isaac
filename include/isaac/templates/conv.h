@@ -32,6 +32,7 @@ namespace isaac{
 namespace templates{
 
 enum ActivationType{
+  Linear,
   ReLU,
   LeakyReLU
 };
@@ -63,6 +64,7 @@ public:
 
 private:
   DType dtype_;
+  ActivationType activation_;
   //input shapes
   param_t C_;
   param_t N_;

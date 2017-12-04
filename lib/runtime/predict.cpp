@@ -191,11 +191,12 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_
   std::unique_ptr<scalar> alpha, beta;
   if(num_re_evaluate > 1)
   {
+    DType ab_dtype = (dtype==INT8X4_TYPE)?FLOAT_TYPE:dtype;
     O.reset(new driver::Buffer(stream.context(), K*M*P*Q*N*size_of(dtype)));
     I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(dtype)));
     F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(dtype)));
-    alpha.reset(new scalar(1., dtype));
-    beta.reset(new scalar(0., dtype));
+    alpha.reset(new scalar(1., ab_dtype));
+    beta.reset(new scalar(0., ab_dtype));
     benchmark = [&](std::vector<param_t> const& x){
       templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);

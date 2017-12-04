@@ -96,10 +96,19 @@ inline void cublasGemm(DType dtype, Stream& stream, char cAT, char cBT, int32_t 
 
 inline cudnnDataType_t cudnnDtype(DType dtype){
   switch(dtype){
+    case INT8X4_TYPE: return CUDNN_DATA_INT8x4;
+    case INT32_TYPE: return CUDNN_DATA_INT32;
     case FLOAT_TYPE: return CUDNN_DATA_FLOAT;
     case DOUBLE_TYPE: return CUDNN_DATA_DOUBLE;
   }
   throw;
+}
+
+inline cudnnTensorFormat_t format(cudnnDataType_t cutype){
+  switch(cutype){
+    case CUDNN_DATA_INT8x4: return CUDNN_TENSOR_NCHW_VECT_C;
+    default: return CUDNN_TENSOR_NCHW;
+  }
 }
 
 inline void cudnnConv(DType dtype, Stream& stream, int32_t D, int32_t H, int32_t W, int32_t N, int32_t K, int32_t M, int32_t P, int32_t Q, int32_t C, int32_t T, int32_t R, int32_t S,
@@ -123,7 +132,8 @@ inline void cudnnConv(DType dtype, Stream& stream, int32_t D, int32_t H, int32_t
   }
 
   cudnnHandle_t handle = dispatch::cudnnHandle(ctx);
-  cudnnDataType_t cutype = cudnnDtype(dtype);
+  cudnnDataType_t in_cutype = cudnnDtype(dtype);
+  cudnnDataType_t conv_cutype = (dtype == INT8X4_TYPE)?CUDNN_DATA_INT32:in_cutype;
 
   dispatch::cudnnSetStream(handle, (CUstream)stream);
   cudnnTensorDescriptor_t tO, tI;
@@ -134,15 +144,14 @@ inline void cudnnConv(DType dtype, Stream& stream, int32_t D, int32_t H, int32_t
   dispatch::cudnnCreateTensorDescriptor(&tI);
   dispatch::cudnnCreateFilterDescriptor(&tF);
 
-  dispatch::cudnnSetTensorNdDescriptorEx(tO, CUDNN_TENSOR_NCHW, cutype, Oshapes.size(), Oshapes.data());
-  dispatch::cudnnSetFilterNdDescriptor(tF, cutype, CUDNN_TENSOR_NCHW, Fshapes.size(), Fshapes.data());
-  dispatch::cudnnSetTensorNdDescriptorEx(tI, CUDNN_TENSOR_NCHW, cutype, Ishapes.size(), Ishapes.data());
+  dispatch::cudnnSetTensorNdDescriptorEx(tO, format(in_cutype), in_cutype, Oshapes.size(), Oshapes.data());
+  dispatch::cudnnSetFilterNdDescriptor(tF, in_cutype, format(in_cutype), Fshapes.size(), Fshapes.data());
+  dispatch::cudnnSetTensorNdDescriptorEx(tI, format(in_cutype), in_cutype, Ishapes.size(), Ishapes.data());
 
   dispatch::cudnnCreateConvolutionDescriptor(&conv);
-  dispatch::cudnnSetConvolutionNdDescriptor(conv, pad.size(), pad.data(), stride.data(), upscale.data(), CUDNN_CROSS_CORRELATION, cutype);
-
+  dispatch::cudnnSetConvolutionNdDescriptor(conv, pad.size(), pad.data(), stride.data(), upscale.data(), CUDNN_CROSS_CORRELATION, conv_cutype);
   dispatch::cudnnGetConvolutionForwardAlgorithm(handle, tI, tF, conv, tO, CUDNN_CONVOLUTION_FWD_SPECIFY_WORKSPACE_LIMIT, 1024*1024*64, &algo);
-//  algo = CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM;
+
   size_t workspace_size;
   dispatch::cudnnGetConvolutionForwardWorkspaceSize(handle, tI, tF, conv, tO, algo, &workspace_size);
   static Buffer work(ctx, 1024*1024*64);

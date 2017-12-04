@@ -63,19 +63,17 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   size_t dtsize = sc::size_of(dtype);
 
   //alpha, beta are not half-precision
-  sc::DType ab_dtype = dtype;
-  if(ab_dtype != sc::DOUBLE_TYPE)
-    ab_dtype = sc::FLOAT_TYPE;
+  sc::DType ab_dtype = (dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:dtype;
   sc::scalar alpha(1., ab_dtype), beta(0., ab_dtype);
 
   //Initialize input/output buffers
   sc::param_t M, P, Q;
   sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
 
-
+  size_t vect_c = (dtype==sc::INT8X4_TYPE)?4:1;
   std::vector<DTYPE> iO(N*K*P*Q*M);
-  std::vector<DTYPE> iI(N*C*H*W*D);
-  std::vector<DTYPE> iF(K*C*R*S*T);
+  std::vector<DTYPE> iI(N*C/vect_c*H*W*D);
+  std::vector<DTYPE> iF(K*C/vect_c*R*S*T);
   drv::Buffer O(ctx, iO.size()*dtsize);
   drv::Buffer I(ctx, iI.size()*dtsize);
   drv::Buffer F(ctx, iF.size()*dtsize);
@@ -83,7 +81,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   for(size_t i = 0; i < iI.size(); ++i) iI[i] = (float)rand()/RAND_MAX;
   for(size_t i = 0; i < iF.size(); ++i) iF[i] = (float)rand()/RAND_MAX;
   std::vector<DTYPE> iF_cudnn(iF.size());
-  to_cudnn(iF, iF_cudnn, C, T, R, S, K);
+  to_cudnn(iF, iF_cudnn, C/vect_c, T, R, S, K);
 
   //Ground result (cuDNN)
   drv::Stream stream(ctx);
