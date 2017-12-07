@@ -29,7 +29,7 @@
 //CUDA Backend
 #include "isaac/external/CUDA/cuda.h"
 #include "isaac/external/CUDA/nvrtc.h"
-#include "isaac/external/CUDA/cublas.h"
+#include "isaac/external/CUDA/cublas_v2.h"
 #include "isaac/external/CUDA/cudnn.h"
 #include "isaac/external/CUDA/nvml.h"
 

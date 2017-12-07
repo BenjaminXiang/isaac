@@ -123,10 +123,10 @@ class build_clib_subclass(build_clib):
                     output_dir=self.build_clib,
                     debug=self.debug
                     )
-            
+
 # Build EXTENSION
 from distutils.command.build_ext import build_ext
-                    
+
 class build_ext_subclass(build_ext):
     """
     Removes -Wstrict-prototypes from build_ext because compiling C++

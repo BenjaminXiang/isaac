@@ -111,12 +111,11 @@ class ConvOp : public OpKernel {
       return;
 
     /* Compute convolution */
-    isaac::scalar alpha(1., dtype), beta(0., dtype);
     isaac::driver::Buffer I(stream.context(), (CUdeviceptr)inputs.flat<float>().data(), false);
     isaac::driver::Buffer F(stream.context(), (CUdeviceptr)filter.flat<float>().data(), false);
     isaac::driver::Buffer O(stream.context(), (CUdeviceptr)output->flat<float>().data(), false);
     isaac::CONV(stream.context().device(), stream, dtype,
-                N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O);
+                N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, F, O);
   }
 
 private:

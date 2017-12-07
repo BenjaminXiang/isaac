@@ -61,6 +61,7 @@ template<class DTYPE>
 void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D, size_t H, size_t W, size_t C, size_t T, size_t R, size_t S, size_t pad_d, size_t pad_h, size_t pad_w, size_t stride_d, size_t stride_h, size_t stride_w){
   sc::DType dtype = sc::to_DType<DTYPE>::value;
   size_t dtsize = sc::size_of(dtype);
+  sc::ActivationType activation = sc::Linear;
 
   //alpha, beta are not half-precision
   sc::DType ab_dtype = (dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:dtype;
@@ -96,7 +97,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.write(F, true, 0, iF.size()*dtsize, iF.data());
 
   //Test ISAAC
-  sc::CONV(ctx.device(), stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O);
+  sc::CONV(ctx.device(), stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, F, O, NULL, activation);
   stream.read(O, true, 0, iO.size()*dtsize, (void*)iO.data());
   if(!is_correct(iO, rO, max_rounding_error(DTYPE(C))))
     exit(EXIT_FAILURE);
@@ -107,7 +108,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<int> rgrid = {1, 8};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rs, rs, rl, r1, rgrid, rgrid})){
-    isaac::templates::Conv conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+    isaac::templates::Conv conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, activation,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     std::string src;
@@ -121,7 +122,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{
-      conv.enqueue(kernel, stream, alpha, I, F, beta, O);
+      conv.enqueue(kernel, stream, I, F, O);
     }catch(isaac::driver::exception::cuda::launch_out_of_resources){
       continue;
     }

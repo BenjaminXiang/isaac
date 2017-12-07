@@ -183,32 +183,32 @@ std::vector<param_t> Profile::predict(driver::Device const & device, std::vector
 ConvProfile::ConvProfile(u_char* data): Profile(data, templates::Conv::Nshapes){}
 
 templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
-                      param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate)
+                                    param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+                                    ActivationType activation,
+                                    size_t num_re_evaluate)
 {
   driver::Device const & device = stream.context().device();
   benchmark_t benchmark;
   std::unique_ptr<driver::Buffer> O, I, F;
-  std::unique_ptr<scalar> alpha, beta;
   if(num_re_evaluate > 1)
   {
-    DType ab_dtype = (dtype==INT8X4_TYPE)?FLOAT_TYPE:dtype;
     O.reset(new driver::Buffer(stream.context(), K*M*P*Q*N*size_of(dtype)));
     I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(dtype)));
     F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(dtype)));
-    alpha.reset(new scalar(1., ab_dtype));
-    beta.reset(new scalar(0., ab_dtype));
     benchmark = [&](std::vector<param_t> const& x){
-      templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+      templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, isaac::Linear,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
       std::string src = generator.dump(device, "kernel");
       driver::Module module(stream.context(), src);
       driver::Kernel kernel(module, "kernel");
-      return bench([&](){ generator.enqueue(kernel, stream, *alpha, *I, *F, *beta, *O); }, [&](){ stream.synchronize(); }, device);
+      return bench([&](){ generator.enqueue(kernel, stream, *I, *F, *O); }, [&](){ stream.synchronize(); }, device);
     };
   }
   std::vector<param_t> shapes{dtype, N*M*P*Q, K, C, T*R*S};
   std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid, benchmark, num_re_evaluate);
-  return templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+  return templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S,
+                         pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+                         activation,
                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
 }
 

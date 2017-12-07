@@ -43,6 +43,25 @@ def main():
     except ImportError:
       pass
 
+    # Pytorch
+    try:
+      import torch
+      from torch.utils.ffi import create_extension
+      ffi = torch.utils.ffi.create_extension('isaac.pytorch.c_lib',
+                               language='c++',
+                               sources=[os.path.join('src', 'extensions', 'pytorch.cpp')],
+                               headers=[os.path.join('src', 'extensions', 'pytorch.h')],
+                               include_dirs = include,
+                               relative_to = __file__,
+                               with_cuda=True,
+                               extra_compile_args= flags)
+      ffi = ffi.distutils_extension()
+      ffi.name = 'pytorch.c_lib._c_lib'
+      extensions += [ffi]
+    except ImportError:
+      pass
+
+
     # Setup
     setup(
           name='isaac',
@@ -50,7 +69,7 @@ def main():
           description="ISAAC",
           author='Philippe Tillet',
           author_email='ptillet@g.harvard.edu',
-          packages=['isaac'],
+          packages=['isaac', 'isaac.pytorch', 'isaac.pytorch.c_lib'],
           libraries=[core],
           ext_package='isaac',
           ext_modules=extensions,

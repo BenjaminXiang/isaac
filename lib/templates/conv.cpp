@@ -49,9 +49,11 @@ const size_t Conv::Nshapes = 5;
 const size_t Conv::Ntune = 9;
 const size_t Conv::Nparams = Nshapes + Ntune;
 
-Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
-     param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
-  dtype_(dtype), C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
+Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+           param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+           ActivationType activation,
+           param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
+  dtype_(dtype), activation_(activation), C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
   stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
   vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(gridz)
@@ -470,7 +472,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
   iss << "}" << std::endl;
 
-  iss << ".entry " << name << "(.param ." << io_dtype << " _alpha, .param ." << io_dtype << " _beta," << std::endl
+  iss << ".entry " << name << "(" << std::endl
       << "            .param .b64 _pi, .param .b64 _pf, .param .b64 _po," << std::endl
       << "            .param .b32 _Npix, .param .b32 _Nfilt, .param .b32 _K, .param .b32 _C," << std::endl
       << "            .param .b32 _M, .param .b32 _P, .param .b32 _Q, .param .b32 _N," << std::endl
@@ -481,6 +483,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _strideOk, .param .b32 _strideOm, .param .b32 _strideOp, .param .b32 _strideOq, .param .b32 _strideOn, " << std::endl
       << "            .param .b32 _strideFk, .param .b32 _strideFc, .param .b32 _strideFs, " << std::endl
       << "            .param .b64 _bias," << std::endl
+      << "            .param .b64 _alpha," << std::endl
       << "            .param .b32 _bound)" << std::endl;
   iss << "{" << std::endl;
   // Predicates
@@ -868,15 +871,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("   mul.f32 %rc0_{0}_{1}{2}, %output_rescale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
   }
 
-  iss << "/* Activation */" << std::endl;
-  if(activation_ == ReLU){
-    for(size_t j = 0; j < cs1_ ; j++)
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("   max.f32 %rc0_{0}_{1}{2}, 0., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-  }
-
-  iss << "/* Offsets */" << std::endl;
+  iss << "/* Column offsets */" << std::endl;
   iss << format("  mov.s32 %bid0, %ctaid.x;") << std::endl;
   iss << format("  mov.s32 %bid1, %ctaid.y;") << std::endl;
   iss << format("  mov.s32 %id0, %tid.x;") << std::endl;
@@ -889,12 +884,50 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  add.u32 %offc1_{}, {}, %offc1;", j + s, j*bc1_ + s) << std::endl;
 
   iss << std::endl;
+  iss << "/* Bias */" << std::endl;
+  iss << format("  ld.param.u64 %bias, [_bias];") << std::endl;
+  iss << format("  setp.ne.b64 %has_bias, %bias, 0;") << std::endl;
+  iss << format("  @!%has_bias bra.uni BIAS_DONE;") << std::endl;
+  iss << "DO_BIAS:" << std::endl;
+  for(size_t j = 0; j < cs1_ ; j++)
+    iss << format("  mad.wide.u32 %pbias{0}, %offc1_{0}, {1}, %bias;", j, dtsize) << std::endl;
+  for(size_t j = 0; j < cs1_ ; j++)
+    iss << format("  @%predk{0} ld.global.{1} %rbias{0}, [%pbias{0}];", j, io_dtype) << std::endl;
+  for(size_t j = 0; j < cs1_ ; j++)
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+  for(size_t s = 0; s < vec_; ++s)
+    iss << format("  add.{0} %rc0_{1}_{2}{3}, %rc0_{1}_{2}{3}, %rbias{2};", compute_dtype, i, j, vs[s]) << std::endl;
+  iss << "BIAS_DONE:" << std::endl;
+
+
+  if(activation_ == ReLU){
+    iss << std::endl;
+    iss << "/* ReLU */" << std::endl;
+    iss << "  .reg .b32 %leakage, %alpha;" << std::endl;
+    iss << "  ld.param.b32 %alpha, [_alpha];" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s){
+      iss << format("  mul.f32 %leakage, %rc0_{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
+      iss << format("  slct.f32.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %leakage, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+    }
+  }
+
+  if(dtype_==INT8X4_TYPE){
+    iss << "/* Quantize */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s)
+      iss << format("   cvt.rni.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+  }
+
+
+  iss << std::endl;
+  iss << "/* Row offsets*/" << std::endl;
   iss << format("  mad.lo.s32 %offc0, %bid0, {}, 0;", cl0) << std::endl;
   iss << format("  mad.lo.s32  %offc0, %id0, {}, %offc0;", vec_) << std::endl;
   for(size_t i = 0 ; i < cl0 ; i+= bc0_*vec_)
     iss << format("  add.s32 %offc0_{0}, %offc0, {0};", i) << std::endl;
-
-
   iss << format("  mul.lo.s32 %mMPQ, %MPQ, -1;") << std::endl;
   for(size_t i = 0; i < cl0; i+=vec_*bc0_)
   for(size_t s = 0; s < vec_; s++){
@@ -908,20 +941,19 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  mad.lo.s32 %offc_{0}, %offOmpq{1}, %strideOq, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
   }
 
+  iss << std::endl;
+  iss << "/* Store result */" << std::endl;
   for(size_t j = 0; j < cs1_; j++){
     iss << format("  mad.wide.s32 %pc{0}, %offc1_{0}, %strideOk, %pc;", j) << std::endl;
     iss << format("  mad.wide.s32 %pc{0}, %offc_0, 1, %pc{0};", j) << std::endl;
   }
-
   iss << "// Pointer deltas" << std::endl;
   for(size_t i = 0; i < cs0_ - inc; i+=inc)
     iss << format("  sub.s32 %diffc{0}, %offc_{1}, %offc_{0};", i, i + inc) << std::endl;
-
   iss << "  // Predicates" << std::endl;
   iss << format("  setp.eq.s32 %predz, %idz, 0;") << std::endl;
   for(size_t j = 0; j < cs1_; j++)
     iss << format("  setp.lt.and.s32 %predk{0}, %offc1_{0}, %K, %predz;", j) << std::endl;
-
   iss << "  // Write back" << std::endl;
   for(size_t j = 0; j < cs1_; j++){
     iss << format("  @%predk{0} call.uni store_col, (%pc{0}, %Npix", j);
@@ -936,7 +968,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   return iss.str();
 }
 
-void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, scalar const & alpha, driver::Buffer const & I, driver::Buffer const & F, scalar const & beta, driver::Buffer& O){
+void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, driver::Buffer const *bias, float alpha){
   // Data-type size
   int32_t dtsize = size_of(dtype_);
 
@@ -973,6 +1005,9 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, scalar const 
   size_t grid0 = ceil(Npix, cl0);
   size_t grid1 = ceil(K_, cl1);
 
+  // Leaky ReLU alpha
+  scalar a(alpha, FLOAT_TYPE);
+
   // Last safe index
   int32_t depth = C_*Nfilt;
   // Last filter element
@@ -985,55 +1020,53 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, scalar const 
   // Constant memory
   driver::Buffer LUT = kernel.module().symbol("_LUT");
   driver::Buffer masks = kernel.module().symbol("_masks");
-
   stream.write(LUT, false, 0, cLUT.size()*4, cLUT.data());
   stream.write(masks, false, 0, masks_.size()*4, masks_.data());
 
   // Enqueue
-  DType alpha_dtype = (dtype_==DOUBLE_TYPE)?DOUBLE_TYPE:FLOAT_TYPE;
-  kernel.setArg(0, size_of(alpha_dtype), alpha.data());
-  kernel.setArg(1, size_of(alpha_dtype), beta.data());
-  kernel.setArg(2, I);
-  kernel.setArg(3, F);
-  kernel.setArg(4, O);
-  kernel.setArg(5, Npix);
-  kernel.setArg(6, Nfilt);
-  kernel.setArg(7, K_);
-  kernel.setArg(8, C_);
-  kernel.setArg(9, M_);
-  kernel.setArg(10, P_);
-  kernel.setArg(11, Q_);
-  kernel.setArg(12, N_);
-  kernel.setArg(13, D_);
-  kernel.setArg(14, H_);
-  kernel.setArg(15, W_);
-  kernel.setArg(16, MPQ);
+  kernel.setArg(0, I);
+  kernel.setArg(1, F);
+  kernel.setArg(2, O);
+  kernel.setArg(3, Npix);
+  kernel.setArg(4, Nfilt);
+  kernel.setArg(5, K_);
+  kernel.setArg(6, C_);
+  kernel.setArg(7, M_);
+  kernel.setArg(8, P_);
+  kernel.setArg(9, Q_);
+  kernel.setArg(10, N_);
+  kernel.setArg(11, D_);
+  kernel.setArg(12, H_);
+  kernel.setArg(13, W_);
+  kernel.setArg(14, MPQ);
 
-  kernel.setArg(17, stride_d_);
-  kernel.setArg(18, stride_h_);
-  kernel.setArg(19, stride_w_);
-  kernel.setArg(20, pad_d_);
-  kernel.setArg(21, pad_h_);
-  kernel.setArg(22, pad_w_);
-  kernel.setArg(23, strideIc);
-  kernel.setArg(24, strideId);
-  kernel.setArg(25, strideIh);
-  kernel.setArg(26, strideIw);
-  kernel.setArg(27, strideIn);
+  kernel.setArg(15, stride_d_);
+  kernel.setArg(16, stride_h_);
+  kernel.setArg(17, stride_w_);
+  kernel.setArg(18, pad_d_);
+  kernel.setArg(19, pad_h_);
+  kernel.setArg(20, pad_w_);
+  kernel.setArg(21, strideIc);
+  kernel.setArg(22, strideId);
+  kernel.setArg(23, strideIh);
+  kernel.setArg(24, strideIw);
+  kernel.setArg(25, strideIn);
   // O strides
-  kernel.setArg(28, strideOk);
-  kernel.setArg(29, strideOm);
-  kernel.setArg(30, strideOp);
-  kernel.setArg(31, strideOq);
-  kernel.setArg(32, strideOn);
+  kernel.setArg(26, strideOk);
+  kernel.setArg(27, strideOm);
+  kernel.setArg(28, strideOp);
+  kernel.setArg(29, strideOq);
+  kernel.setArg(30, strideOn);
   // F strides
-  kernel.setArg(33, strideFk);
-  kernel.setArg(34, strideFc);
-  kernel.setArg(35, strideFs);
+  kernel.setArg(31, strideFk);
+  kernel.setArg(32, strideFc);
+  kernel.setArg(33, strideFs);
   // Bias
-  kernel.setArg(36, (uint64_t)0);
+  kernel.setArg(34, bias?*bias:(uint64_t)0);
+  // Activation
+  kernel.setArg(35, size_of(a.dtype()), a.data());
   // Misc.
-  kernel.setArg(37, bound);
+  kernel.setArg(36, bound);
   if(gridz_>1)
     O.set_zero(stream, N_*K_*M_*P_*Q_*dtsize);
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
