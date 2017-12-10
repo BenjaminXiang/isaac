@@ -50,14 +50,15 @@ const size_t Conv::Ntune = 9;
 const size_t Conv::Nparams = Nshapes + Ntune;
 
 Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
-           param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+           param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
            ActivationType activation,
            param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
   dtype_(dtype), activation_(activation), C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
   stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
+  upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
   vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(gridz)
-{        
+{
     // Resize LUT
     size_t block = u_*zs_*bz_;
     size_t Nfilt = T_*R_*S_;
@@ -73,13 +74,13 @@ Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, p
     int32_t strideIc = D_*strideId;
 
     // Init constant memory
-    cLUT.resize(2*nlut);
+    cLUT.resize(nlut + upsample_d_*upsample_h_*upsample_w_*nlut);
     masks_.resize(nlut + (2*pad_h+1)*(2*pad_w+1)*(2*pad_d+1)*nlut);
-    init_constant_memory(cLUT, masks_, strideIc, strideIw, strideIh, strideId);
+    init_constant_memory(cLUT, masks_, nlut, strideIc, strideIw, strideIh, strideId);
+
 }
 
-void Conv::init_constant_memory(std::vector<int32_t> &delta, std::vector<uint32_t> &masks, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId){
-   size_t nlut = delta.size()/2;
+void Conv::init_constant_memory(std::vector<int32_t> &delta, std::vector<uint32_t> &masks, size_t nlut, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId){
    size_t zl = zs_*bz_;
    size_t block = u_*zl;
    size_t Nfilt = T_*R_*S_;
@@ -92,25 +93,40 @@ void Conv::init_constant_memory(std::vector<int32_t> &delta, std::vector<uint32_
        return std::make_tuple(t, r, s);
    };
 
-   // Delta Table
-   for(size_t i = 0; i < nlut; ++i){
-       int32_t ctrs = i;
-       int32_t c = ctrs / Nfilt;
-       int32_t t, r, s;
-       std::tie(t, r, s) = unpack(ctrs % Nfilt);
+   /* Increments */
+   for(size_t i = 0; i < nlut; ++i)
+       delta[i] = 4*(((i + block) % nlut) - i);
 
-       int32_t nextctrs = ctrs + block;
-       int32_t nextc = nextctrs / Nfilt;
-       int32_t nextt, nextr, nexts;
-       std::tie(nextt, nextr, nexts) = unpack(nextctrs % Nfilt);
+   /* Deltas */
+   size_t Ds0 = nlut;
+   size_t Ds1 = upsample_w_;
+   size_t Ds2 = upsample_h_;
+   size_t Ds3 = upsample_d_;
+   for(size_t pd = 0; pd < Ds3; ++pd)
+   for(size_t ph = 0; ph < Ds2; ++ph)
+   for(size_t pw = 0; pw < Ds1; ++pw){
 
-       int32_t cdiff = nextc - c;
-       int32_t tdiff = nextt - t;
-       int32_t rdiff = nextr - r;
-       int32_t sdiff = nexts - s;
+       int32_t* deltas_ptr = &delta[nlut + pw*Ds0 + ph*Ds0*Ds1 + pd*Ds0*Ds1*Ds2];
 
-       delta[i] = cdiff*strideIc + sdiff*strideIw + rdiff*strideIh + tdiff*strideId;
-       delta[nlut + i] = 4*((nextctrs % nlut) - ctrs);
+       // Cumulative increments
+       for(size_t i = 0; i < Ds0; ++i){
+           int32_t ctrs = i;
+           int32_t c = ctrs / Nfilt;
+           int32_t t, r, s;
+           std::tie(t, r, s) = unpack(ctrs % Nfilt);
+
+           int32_t nextctrs = ctrs + block;
+           int32_t nextc = nextctrs / Nfilt;
+           int32_t nextt, nextr, nexts;
+           std::tie(nextt, nextr, nexts) = unpack(nextctrs % Nfilt);
+
+           int32_t cdiff = nextc - c;
+           int32_t tdiff = (nextt + pd)/upsample_d_ - (t + pd)/upsample_d_;
+           int32_t rdiff = (nextr + ph)/upsample_h_ - (r + ph)/upsample_h_;
+           int32_t sdiff = (nexts + pw)/upsample_w_ - (s + pw)/upsample_w_;
+
+           deltas_ptr[i] = cdiff*strideIc + sdiff*strideIw + rdiff*strideIh + tdiff*strideId;
+       }
    }
 
    /* Masks */
@@ -138,16 +154,15 @@ void Conv::init_constant_memory(std::vector<int32_t> &delta, std::vector<uint32_
    }
    for(size_t i = 0; i < nlut; ++i)
      masks[i] = 0x0;
-
 }
 
 void Conv::output_shapes(param_t D, param_t H, param_t W, param_t T, param_t R, param_t S,
-                         param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+                         param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
                          param_t &M, param_t &P, param_t &Q)
 {
-    M = (D - T + 1 + 2*pad_d + stride_d - 1)/stride_d;
-    P = (H - R + 1 + 2*pad_h + stride_h - 1)/stride_h;
-    Q = (W - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
+    M = (D*upsample_d - T + 1 + 2*pad_d + stride_d - 1)/stride_d;
+    P = (H*upsample_h - R + 1 + 2*pad_h + stride_h - 1)/stride_h;
+    Q = (W*upsample_w - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
 }
 
 
@@ -312,7 +327,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
           iss << format("  min.s32 %dlo{0}, %offId{0}, 0;", i + s) << std::endl;
           iss << format("  min.s32 %hlo{0}, %offIh{0}, 0;", i + s) << std::endl;
           iss << format("  min.s32 %wlo{0}, %offIw{0}, 0;", i + s) << std::endl;
-
           iss << format("  add.s32 %dhi{0}, %offId{0}, %Dmpad;", i + s) << std::endl;
           iss << format("  add.s32 %hhi{0}, %offIh{0}, %Hmpad;", i + s) << std::endl;
           iss << format("  add.s32 %whi{0}, %offIw{0}, %Wmpad;", i + s) << std::endl;
@@ -323,23 +337,40 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
           iss << format("  add.s32 %maskd{0}, %pad_d, %dlo{0};", i + s) << std::endl;
           iss << format("  add.s32 %maskd{0}, %maskd{0}, %dhi{0};", i + s) << std::endl;
-
           iss << format("  add.s32 %maskh{0}, %pad_h, %hlo{0};", i + s) << std::endl;
           iss << format("  add.s32 %maskh{0}, %maskh{0}, %hhi{0};", i + s) << std::endl;
-
           iss << format("  add.s32 %maskw{0}, %pad_w, %wlo{0};", i + s) << std::endl;
           iss << format("  add.s32 %maskw{0}, %maskw{0}, %whi{0};", i + s) << std::endl;
 
 
+          iss << "  mov.b32 %masks, _masks;" << std::endl;
+          iss << format("  @!%predi{0} mov.s32 %p_mask{0}, %masks;", i + s) << std::endl;
+          iss << format("  @%predi{0} add.s32 %p_mask{0}, {1}, %masks;", i + s, 4*nlut) << std::endl;
+          iss << format("  @%predi{0} mad.lo.s32 %p_mask{0}, %maskd{0}, {1}, %p_mask{0};", i + s, 4*nlut*(2*pad_w_ + 1)*(2*pad_h_ + 1)) << std::endl;
+          iss << format("  @%predi{0} mad.lo.s32 %p_mask{0}, %maskh{0}, {1}, %p_mask{0};", i + s, 4*nlut*(2*pad_w_ + 1)) << std::endl;
+          iss << format("  @%predi{0} mad.lo.s32 %p_mask{0}, %maskw{0}, {1}, %p_mask{0};", i + s, 4*nlut) << std::endl;
+      }
+      iss << format("  mov.u32 %p_inc_mask, _LUT;") << std::endl;
 
-          iss << format("  @!%predi{0} mov.s32 %pmask{0}, %masks;", i + s) << std::endl;
-          iss << format("  @%predi{0} add.s32 %pmask{0}, {1}, %masks;", i + s, 4*nlut) << std::endl;
-          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskd{0}, {1}, %pmask{0};", i + s, 4*nlut*(2*pad_w_ + 1)*(2*pad_h_ + 1)) << std::endl;
-          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskh{0}, {1}, %pmask{0};", i + s, 4*nlut*(2*pad_w_ + 1)) << std::endl;
-          iss << format("  @%predi{0} mad.lo.s32 %pmask{0}, %maskw{0}, {1}, %pmask{0};", i + s, 4*nlut) << std::endl;
+
+      iss << format("  // I up-sampling") << std::endl;
+      for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
+      for(size_t s = 0; s < vec_; s++){
+          iss << format("  rem.s32 %offDeltad{0}, %offId{0}, {1};", i + s, upsample_d_) << std::endl;
+          iss << format("  rem.s32 %offDeltah{0}, %offIh{0}, {1};", i + s, upsample_h_) << std::endl;
+          iss << format("  rem.s32 %offDeltaw{0}, %offIw{0}, {1};", i + s, upsample_w_) << std::endl;
       }
 
-
+      iss << format("  // I deltas pointers") << std::endl;
+      iss << "  mov.b32 %p_inc_delta, _LUT;" << std::endl;
+      iss << format("  mad.lo.u32 %p_inc_delta, %idctrs, 4, %p_inc_delta;") << std::endl;
+      for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
+      for(size_t s = 0; s < vec_; s++){
+        iss << format("  add.s32 %p_delta{0}, %p_inc_delta, {1};", pqn + s, 4*nlut) << std::endl;
+        iss << format("  mad.lo.s32 %p_delta{0}, %offDeltad{0}, {1}, %p_delta{0};", pqn + s, 4*nlut*upsample_w_*upsample_h_) << std::endl;
+        iss << format("  mad.lo.s32 %p_delta{0}, %offDeltah{0}, {1}, %p_delta{0};", pqn + s, 4*nlut*upsample_w_) << std::endl;
+        iss << format("  mad.lo.s32 %p_delta{0}, %offDeltaw{0}, {1}, %p_delta{0};", pqn + s, 4*nlut) << std::endl;
+      }
 
       iss << format("  // I pointers") << std::endl;
       iss << format("  div.s32 %c, %idctrs, {};", Nfilt) << std::endl;
@@ -348,22 +379,26 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  rem.s32 %s, %trs, {};", S_) << std::endl;
       iss << format("  div.s32 %t, %tr, {};", R_) << std::endl;
       iss << format("  rem.s32 %r, %tr, {};", R_) << std::endl;
-      iss << format("  mad.lo.s32 %offi, %t, %strideId, 0;") << std::endl;
-      iss << format("  mad.lo.s32 %offi, %r, %strideIh, %offi;") << std::endl;
-      iss << format("  mad.lo.s32 %offi, %s, %strideIw, %offi;") << std::endl;
-      iss << format("  mad.lo.s32 %offi, %c, %strideIc, %offi;") << std::endl;
+
+
+      iss << format("  mad.lo.s32 %offi, %c, %strideIc, 0;") << std::endl;
       if(gridz_ > 1)
         iss << format("  mad.lo.s32 %offi, %offc, %strideIc, %offi;", dtsize) << std::endl;
       for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
       for(size_t s = 0; s < vec_; s++){
+        iss << format("  add.s32 %offId{0}, %offId{0}, %t;", pqn + s) << std::endl;
+        iss << format("  add.s32 %offIh{0}, %offIh{0}, %r;", pqn + s) << std::endl;
+        iss << format("  add.s32 %offIw{0}, %offIw{0}, %s;", pqn + s) << std::endl;
+        iss << format("  div.s32 %offId{0}, %offId{0}, {1};", pqn + s, upsample_d_) << std::endl;
+        iss << format("  div.s32 %offIh{0}, %offIh{0}, {1};", pqn + s, upsample_h_) << std::endl;
+        iss << format("  div.s32 %offIw{0}, %offIw{0}, {1};", pqn + s, upsample_w_) << std::endl;
+
         iss << format("  mad.lo.s32 %offi{0}, %offId{0}, %strideId, %offi;", pqn + s) << std::endl;
         iss << format("  mad.lo.s32 %offi{0}, %offIh{0}, %strideIh, %offi{0};", pqn + s) << std::endl;
         iss << format("  mad.lo.s32 %offi{0}, %offIw{0}, %strideIw, %offi{0};", pqn + s) << std::endl;
         iss << format("  mad.lo.s32 %offi{0}, %offIn{0}, %strideIn, %offi{0};", pqn + s) << std::endl;
-      }
-      for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
-      for(size_t s = 0; s < vec_; s++)
         iss << format("  mad.wide.s32 %pi{0}, %offi{0}, 1, %pi;", pqn + s) << std::endl;
+      }
   };
 
   auto ptr_ldg_f = [&](){
@@ -478,7 +513,9 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _M, .param .b32 _P, .param .b32 _Q, .param .b32 _N," << std::endl
       << "            .param .b32 _D, .param .b32 _H, .param .b32 _W," << std::endl
       << "            .param .b32 _MPQ," << std::endl
-      << "            .param .b32 _stride_d, .param .b32 _stride_h, .param .b32 _stride_w, .param .b32 _pad_d, .param .b32 _pad_h, .param .b32 _pad_w, " << std::endl
+      << "            .param .b32 _pad_d, .param .b32 _pad_h, .param .b32 _pad_w, " << std::endl
+      << "            .param .b32 _stride_d, .param .b32 _stride_h, .param .b32 _stride_w," << std::endl
+      << "            .param .b32 _upsample_d, .param .b32 _upsample_h, .param .b32 _upsample_w," << std::endl
       << "            .param .b32 _strideIc, .param .b32 _strideId, .param .b32 _strideIh, .param .b32 _strideIw, .param .b32 _strideIn, " << std::endl
       << "            .param .b32 _strideOk, .param .b32 _strideOm, .param .b32 _strideOp, .param .b32 _strideOq, .param .b32 _strideOn, " << std::endl
       << "            .param .b32 _strideFk, .param .b32 _strideFc, .param .b32 _strideFs, " << std::endl
@@ -511,13 +548,15 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  .reg .b32 %ctrs, %trs, %t, %c, %tr, %r, %s;" << std::endl;
   iss << "  .reg .b32 %nextctrs, %nexttrs, %nextt, %nextc, %nexttr, %nextr, %nexts;" << std::endl;
   iss << "  .reg .b32 %cdiff, %tdiff, %rdiff, %sdiff;" << std::endl;
-  iss << "  .reg .b32 %maskf, %masks, %LUT, %writelut, %readlut, %inclut, %incmask, %pincmask;" << std::endl;
+  iss << "  .reg .b32 %maskf, %masks, %p_delta, %writelut, %readlut, %inc_delta, %p_inc_delta, %inc_mask, %p_inc_mask;" << std::endl;
   for(size_t i = 0; i < cl0; i += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++){
-      iss << format("  .reg .b32 %maski{0}, %pmask{0};", i + s) << std::endl;
+      iss << format("  .reg .b32 %maski{0}, %p_mask{0};", i + s) << std::endl;
+      iss << format("  .reg .b32 %p_delta{0}, %inc_i{0};", i + s) << std::endl;
+      iss << format("  .reg .b32 %t{0}, %r{0}, %s{0};", i + s) << std::endl;
   }
   // Tensor shapes
-  iss << "  .reg .b32 %pad_d, %pad_h, %pad_w, %stride_d, %stride_h, %stride_w;" << std::endl;
+  iss << "  .reg .b32 %pad_d, %pad_h, %pad_w, %stride_d, %stride_h, %stride_w, %upsample_d, %upsample_h, %upsample_w;" << std::endl;
   iss << "  .reg .b32 %Npix, %K, %C, %Nfilt, %CTRS;" << std::endl;
   iss << "  .reg .b32 %D, %H, %W, %M, %P, %Q, %N, %MPQ, %mN, %mP, %mM, %mQ, %mMPQ;" << std::endl;
   // Strides
@@ -526,7 +565,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .b32 %strideOk, %strideOm, %strideOp, %strideOq, %strideOn;") << std::endl;
   // Pointers
   iss << format("  .reg .b64 %pi, %pf, %pc;") << std::endl;
-  iss << format("  .reg .b32 %offi, %inci, %offF, %incf;") << std::endl;
+  iss << format("  .reg .b32 %offi, %inc_i, %offF, %incf;") << std::endl;
   for(size_t i = 0; i < cl0; i += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++)
      iss << format("  .reg .b32 %offi{};", i + s) << std::endl;
@@ -557,6 +596,9 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  .reg.u32 %offId{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offIh{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offIw{};", i + s) << std::endl;
+    iss << format("  .reg.u32 %offDeltad{};", i + s) << std::endl;
+    iss << format("  .reg.u32 %offDeltah{};", i + s) << std::endl;
+    iss << format("  .reg.u32 %offDeltaw{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offIn{};", i + s) << std::endl;
     iss << format("  .reg.u32 %dlo{0}, %hlo{0}, %wlo{0};", i + s) << std::endl;
     iss << format("  .reg.u32 %dhi{0}, %hhi{0}, %whi{0};", i + s) << std::endl;
@@ -623,7 +665,9 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  ld.param.s32 %stride_d, [_stride_d];" << std::endl;
   iss << "  ld.param.s32 %stride_h, [_stride_h];" << std::endl;
   iss << "  ld.param.s32 %stride_w, [_stride_w];" << std::endl;
-
+  iss << "  ld.param.s32 %upsample_d, [_upsample_d];" << std::endl;
+  iss << "  ld.param.s32 %upsample_h, [_upsample_h];" << std::endl;
+  iss << "  ld.param.s32 %upsample_w, [_upsample_w];" << std::endl;
 
   iss << "  ld.param.s32 %strideIc, [_strideIc];" << std::endl;
   iss << "  ld.param.s32 %strideId, [_strideId];" << std::endl;
@@ -644,9 +688,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << "  ld.param.s32 %bound, [_bound];" << std::endl;
 
-  iss << "  // Constant memory" << std::endl;
-  iss << "  mov.b32 %LUT, _LUT;" << std::endl;
-  iss << "  mov.b32 %masks, _masks;" << std::endl;
 
   iss << "  // Shared memory" << std::endl;
   iss << format("  .shared .align 16 .b8 _shared[{}];", size_shmem) << std::endl;
@@ -709,9 +750,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  // Bounds" << std::endl;
   iss << format("  mul.lo.s32 %CTRS, %C, %Nfilt;") << std::endl;
 
-  iss << format("  add.u32 %pincmask, %LUT, {};", 4*nlut) << std::endl;
-  iss << format("  mad.lo.u32 %LUT, %idctrs, 4, %LUT;") << std::endl;
-
   iss << "bar.sync 0;" << std::endl;
   iss << std::endl;
   iss << " //First load" << std::endl;
@@ -720,7 +758,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  @!%predcrs mov.b32 %maskf, 0x0;") << std::endl;
   for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++)
-    iss << format("  ld.const.b32 %maski{0}, [%pmask{0}];", i + s) << std::endl;;
+    iss << format("  ld.const.b32 %maski{0}, [%p_mask{0}];", i + s) << std::endl;;
   for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
   for(size_t s = 0; s < vec_ ; ++s)
     iss << format("  and.b32 %mask{}, %maskf, %maski{};", i + s, i + s) << std::endl;
@@ -750,13 +788,16 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   // Increment pointers
   iss << " // Increment filter pointers" << std::endl;
   iss << format("  mad.wide.u32 %pf, %incf, {}, %pf;", 1) << std::endl;
+
   iss << " // Increment image pointers" << std::endl;
-  iss << format("  ld.const.b32 %inci, [%LUT];") << std::endl;
-  iss << format("  ld.const.b32 %inclut, [%LUT + {}];", 4*nlut) << std::endl;
-  iss << format("  add.s32 %LUT, %LUT, %inclut;") << std::endl;
+  iss << format("  ld.const.b32 %inc_delta, [%p_inc_delta];") << std::endl;
+  iss << format("  add.s32 %p_inc_delta, %p_inc_delta, %inc_delta;") << std::endl;
   for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
-  for(size_t s = 0; s < vec_; s++)
-    iss << format("  mad.wide.u32 %pi{}, %inci, {}, %pi{};", pqn + s, 1, pqn + s) << std::endl;
+  for(size_t s = 0; s < vec_; s++){
+    iss << format("  ld.const.b32 %inc_i{0}, [%p_delta{0}];", pqn + s) << std::endl;
+    iss << format("  mad.wide.u32 %pi{0}, %inc_i{0}, {1}, %pi{0};", pqn + s, 1) << std::endl;
+    iss << format("  add.s32 %p_delta{0}, %p_delta{0}, %inc_delta;", pqn + s) << std::endl;
+  }
 
   // Swap buffers
   for(char x: std::vector<char>{'i', 'f'}){
@@ -770,14 +811,14 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  setp.lt.s32 %predcrs, %idctrs, %CTRS;") << std::endl;
   iss << format("  setp.gt.s32 %predloop, %CTRS, %bound;") << std::endl;
   // Images
-  iss << format("  ld.const.b32 %incmask, [%pincmask];") << std::endl;
-  iss << format("  add.s32 %pincmask, %pincmask, %incmask;") << std::endl;
+  iss << format("  ld.const.b32 %inc_mask, [%p_inc_mask];") << std::endl;
+  iss << format("  add.s32 %p_inc_mask, %p_inc_mask, %inc_mask;") << std::endl;
   for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++)
-      iss << format("  add.s32 %pmask{0}, %pmask{0}, %incmask;", i + s) << std::endl;
+      iss << format("  add.s32 %p_mask{0}, %p_mask{0}, %inc_mask;", i + s) << std::endl;
   for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++)
-      iss << format("  ld.const.b32 %maski{0}, [%pmask{0}];", i + s) << std::endl;
+      iss << format("  ld.const.b32 %maski{0}, [%p_mask{0}];", i + s) << std::endl;
   iss << format("  @!%predcrs mov.b32 %maskf, 0x0;") << std::endl;
   for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
   for(size_t s = 0; s < vec_ ; ++s)
@@ -1035,38 +1076,40 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream, driver::Buffe
   kernel.setArg(8, P_);
   kernel.setArg(9, Q_);
   kernel.setArg(10, N_);
-  kernel.setArg(11, D_);
-  kernel.setArg(12, H_);
-  kernel.setArg(13, W_);
+  kernel.setArg(11, D_*upsample_d_);
+  kernel.setArg(12, H_*upsample_h_);
+  kernel.setArg(13, W_*upsample_w_);
   kernel.setArg(14, MPQ);
-
-  kernel.setArg(15, stride_d_);
-  kernel.setArg(16, stride_h_);
-  kernel.setArg(17, stride_w_);
-  kernel.setArg(18, pad_d_);
-  kernel.setArg(19, pad_h_);
-  kernel.setArg(20, pad_w_);
-  kernel.setArg(21, strideIc);
-  kernel.setArg(22, strideId);
-  kernel.setArg(23, strideIh);
-  kernel.setArg(24, strideIw);
-  kernel.setArg(25, strideIn);
+  kernel.setArg(15, pad_d_);
+  kernel.setArg(16, pad_h_);
+  kernel.setArg(17, pad_w_);
+  kernel.setArg(18, stride_d_);
+  kernel.setArg(19, stride_h_);
+  kernel.setArg(20, stride_w_);
+  kernel.setArg(21, upsample_d_);
+  kernel.setArg(22, upsample_h_);
+  kernel.setArg(23, upsample_w_);
+  kernel.setArg(24, strideIc);
+  kernel.setArg(25, strideId);
+  kernel.setArg(26, strideIh);
+  kernel.setArg(27, strideIw);
+  kernel.setArg(28, strideIn);
   // O strides
-  kernel.setArg(26, strideOk);
-  kernel.setArg(27, strideOm);
-  kernel.setArg(28, strideOp);
-  kernel.setArg(29, strideOq);
-  kernel.setArg(30, strideOn);
+  kernel.setArg(29, strideOk);
+  kernel.setArg(30, strideOm);
+  kernel.setArg(31, strideOp);
+  kernel.setArg(32, strideOq);
+  kernel.setArg(33, strideOn);
   // F strides
-  kernel.setArg(31, strideFk);
-  kernel.setArg(32, strideFc);
-  kernel.setArg(33, strideFs);
+  kernel.setArg(34, strideFk);
+  kernel.setArg(35, strideFc);
+  kernel.setArg(36, strideFs);
   // Bias
-  kernel.setArg(34, bias?*bias:(uint64_t)0);
+  kernel.setArg(37, bias?*bias:(uint64_t)0);
   // Activation
-  kernel.setArg(35, size_of(a.dtype()), a.data());
+  kernel.setArg(38, size_of(a.dtype()), a.data());
   // Misc.
-  kernel.setArg(36, bound);
+  kernel.setArg(39, bound);
   if(gridz_>1)
     O.set_zero(stream, N_*K_*M_*P_*Q_*dtsize);
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});

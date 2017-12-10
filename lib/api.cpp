@@ -57,7 +57,10 @@ void GEMM(driver::Device const & device, driver::Stream & stream,
 
 void CONV(driver::Device const & device, driver::Stream & stream,
           DType dtype, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t C, param_t T, param_t R, param_t S,
-          param_t D, param_t H, param_t W, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+          param_t D, param_t H, param_t W,
+          param_t pad_d, param_t pad_h, param_t pad_w,
+          param_t stride_d, param_t stride_h, param_t stride_w,
+          param_t upsample_d, param_t upsample_h, param_t upsample_w,
           driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O,
           driver::Buffer const * bias, ActivationType activation, float alpha, templates::Conv* generator)
 {
@@ -73,7 +76,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
     driver::Stream & stream = (driver::Stream&)std::get<0>(key);
     DType dtype = std::get<1>(key);
     std::vector<param_t> const & x = std::get<2>(key);
-    templates::Conv result = profile->predict(stream, dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], (ActivationType)x[18]);
+    templates::Conv result = profile->predict(stream, dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21]);
     return std::make_shared<templates::Conv>(result);
   });
 
@@ -86,7 +89,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
-    generator = inference.get(key_type(stream, dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, activation})).get();
+    generator = inference.get(key_type(stream, dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation})).get();
 
   generator->enqueue(*kernels.get(generator), stream,  I, F, O, bias, alpha);
 }

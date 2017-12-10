@@ -1,22 +1,22 @@
 /* Copyright 2015-2017 Philippe Tillet
-* 
-* Permission is hereby granted, free of charge, to any person obtaining 
-* a copy of this software and associated documentation files 
-* (the "Software"), to deal in the Software without restriction, 
-* including without limitation the rights to use, copy, modify, merge, 
-* publish, distribute, sublicense, and/or sell copies of the Software, 
-* and to permit persons to whom the Software is furnished to do so, 
+*
+* Permission is hereby granted, free of charge, to any person obtaining
+* a copy of this software and associated documentation files
+* (the "Software"), to deal in the Software without restriction,
+* including without limitation the rights to use, copy, modify, merge,
+* publish, distribute, sublicense, and/or sell copies of the Software,
+* and to permit persons to whom the Software is furnished to do so,
 * subject to the following conditions:
-* 
-* The above copyright notice and this permission notice shall be 
+*
+* The above copyright notice and this permission notice shall be
 * included in all copies or substantial portions of the Software.
-* 
-* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, 
-* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF 
+*
+* THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+* EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
 * MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.
 * IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY
-* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, 
-* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE 
+* CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT,
+* TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE
 * SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 */
 
@@ -45,11 +45,11 @@ public:
   static const size_t Nparams;
 
 private:
-  void init_constant_memory(std::vector<int32_t>& delta, std::vector<uint32_t> &masks, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId);
+  void init_constant_memory(std::vector<int32_t>& delta, std::vector<uint32_t> &masks, size_t nlut, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId);
 
 public:
   Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
-       param_t pad_h, param_t pad_w, param_t pad_d, param_t stride_h, param_t stride_w, param_t stride_d,
+       param_t pad_h, param_t pad_w, param_t pad_d, param_t stride_h, param_t stride_w, param_t stride_d, param_t upsample_d, param_t upsample_h, param_t upsample_w,
        ActivationType activation,
        param_t vec, param_t bpqn, param_t bk, param_t pqns, param_t ks, param_t crs_l, param_t cs, param_t bc, param_t gridc);
   // Execution
@@ -58,8 +58,9 @@ public:
   void enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, driver::Buffer const * bias = NULL, float alpha = 0);
   // Validity
   static void output_shapes(param_t D, param_t H, param_t W, param_t T, param_t R, param_t S, param_t pad_d,
-                            param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t& M,
-                            param_t& P, param_t& Q);
+                            param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+                            param_t upsample_d, param_t upsample_h, param_t upsample_w,
+                            param_t& M, param_t& P, param_t& Q);
   static void check_valid(driver::Device const & device, size_t M, param_t* params, uint8_t* valid);
   // Benchmark
   static double tflops(param_t P, param_t Q, param_t M, param_t K, param_t N, param_t C, param_t R, param_t S, param_t T, double time);
@@ -91,6 +92,10 @@ private:
   param_t stride_d_;
   param_t stride_h_;
   param_t stride_w_;
+  // upsample
+  param_t upsample_d_;
+  param_t upsample_h_;
+  param_t upsample_w_;
   //parameters
   param_t vec_;
   param_t bc0_;
