@@ -7,17 +7,27 @@ import torch.nn.functional as F
 import torch.optim as optim
 import isaac.pytorch
 import os
+import math
 
+# Quantization
+def quantize(input, bits):
+    bound = math.pow(2.0, bits-1)
+    min = - bound
+    max = bound - 1
+    scale = max / input.abs().max()
+    rounded = torch.floor(input*scale + 0.5)
+    return torch.clamp(rounded, min, max)/scale, scale
+    
 # Module
 class ConvNet(nn.Module):
     
     def __init__(self):
         super(ConvNet, self).__init__()
-        self.conv1_act = nn.Sequential(nn.Conv2d(1, 20, (5, 5), (1, 1)), nn.LeakyReLU(0.05))
+        self.conv1_act = nn.Sequential(nn.Conv2d(1, 20, (5, 5)), nn.LeakyReLU(0.05))
         self.pool1 = nn.MaxPool2d(2, 2)
-        self.conv2_act = nn.Sequential(nn.Conv2d(20, 50, (5, 5), (1, 1)), nn.LeakyReLU(0.05))
+        self.conv2_act = nn.Sequential(nn.Conv2d(20, 64, (5, 5)), nn.LeakyReLU(0.05))
         self.pool2 = nn.MaxPool2d(2, 2)
-        self.fc1 = nn.Linear(4*4*50, 500)
+        self.fc1 = nn.Linear(4*4*64, 500)
         self.fc2 = nn.Linear(500, 10)
         self.ceriation = nn.CrossEntropyLoss()
         
@@ -26,7 +36,7 @@ class ConvNet(nn.Module):
         x = self.pool1(x)
         x = self.conv2_act(x)
         x = self.pool2(x)
-        x = x.view(-1, 4*4*50)
+        x = x.view(-1, 4*4*64)
         x = self.fc1(x)
         x = self.fc2(x)
         loss = self.ceriation(x, target)
@@ -34,6 +44,7 @@ class ConvNet(nn.Module):
         
     def path(self):
         return 'network/conv2d.pth'
+
 
 # Data Set
 root, download = './data', True
@@ -73,11 +84,15 @@ if not os.path.exists(model.path()):
     torch.save(model.state_dict(), model.path())
 
 # Inference
-model.conv1_act = nn.Sequential(isaac.pytorch.Conv2d(1, 20, (5, 5), (1, 1), activation='relu', alpha=0.05))
-model.conv2_act = nn.Sequential(isaac.pytorch.Conv2d(20, 50, (5, 5), (1, 1), activation='relu', alpha=0.05))
+#model.conv1_act = nn.Sequential(isaac.pytorch.Conv2d(1, 20, (5, 5), (1, 1), activation='relu', alpha=0.05))
+#model.conv2_act = nn.Sequential(isaac.pytorch.Conv2d(20, 50, (5, 5), (1, 1), activation='relu', alpha=0.05))
 model.load_state_dict(torch.load(model.path()))
-model.conv1_act[0].weight.data = model.conv1_act[0].weight.data.permute(1, 2, 3, 0)
-model.conv2_act[0].weight.data = model.conv2_act[0].weight.data.permute(1, 2, 3, 0)
+model.conv1_act[0].weight.data = quantize(model.conv1_act[0].weight.data, 8)[0]
+model.conv2_act[0].weight.data = quantize(model.conv2_act[0].weight.data, 8)[0]
+model.fc1.weight.data = quantize(model.fc1.weight.data, 8)[0]
+model.fc2.weight.data = quantize(model.fc2.weight.data, 8)[0]
+#model.conv1_act[0].weight.data = model.conv1_act[0].weight.data.permute(1, 2, 3, 0)
+#model.conv2_act[0].weight.data = model.conv2_act[0].weight.data.permute(1, 2, 3, 0)
 accuracy, test_loss = 0, 0
 for batch_idx, (x, target) in enumerate(test_loader):
     x, target = Variable(x.cuda(), volatile=True), Variable(target.cuda(), volatile=True)

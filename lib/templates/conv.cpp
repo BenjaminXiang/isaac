@@ -62,7 +62,6 @@ Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, p
     size_t block = u_*zs_*bz_;
     size_t Nfilt = T_*R_*S_;
     size_t nlut = (block + Nfilt - 1)/Nfilt * Nfilt;
-    cLUT.resize(2*nlut);
 
     // Data-type size
     int32_t dtsize = size_of(dtype_);
@@ -74,6 +73,7 @@ Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, p
     int32_t strideIc = D_*strideId;
 
     // Init constant memory
+    cLUT.resize(2*nlut);
     masks_.resize(nlut + (2*pad_h+1)*(2*pad_w+1)*(2*pad_d+1)*nlut);
     init_constant_memory(cLUT, masks_, strideIc, strideIw, strideIh, strideId);
 }
