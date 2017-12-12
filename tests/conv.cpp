@@ -101,8 +101,8 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   drv::Buffer I_upsampled(ctx, iI_upsampled.size()*dtsize);
   drv::Buffer F(ctx, iF.size()*dtsize);
   srand(0);
-  for(size_t i = 0; i < iI.size(); ++i) iI[i] = i;
-  for(size_t i = 0; i < iF.size(); ++i) iF[i] = 1;
+  for(size_t i = 0; i < iI.size(); ++i) iI[i] = (float)rand()/RAND_MAX;
+  for(size_t i = 0; i < iF.size(); ++i) iF[i] = (float)rand()/RAND_MAX;
   std::vector<DTYPE> iF_cudnn(iF.size());
   to_cudnn(iF, iF_cudnn, C/vect_c, T, R, S, K);
   upsample(iI, iI_upsampled, N, C, D, H, W, upsample_d, upsample_h, upsample_w);
@@ -183,7 +183,7 @@ int main(){
   std::cout << "===============" << std::endl;
   std::cout << "CONV: FPROP" << std::endl;
   std::cout << "-----------" << std::endl;
-  do_test<float>(ctx, 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 2, 2);
+  do_test<float>(ctx, 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 2, 2, 2);
   do_test<float>(ctx, 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1);
   do_test<float>(ctx, 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1);
   do_test<float>(ctx, 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1);

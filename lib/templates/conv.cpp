@@ -795,7 +795,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++){
     iss << format("  ld.const.b32 %inc_i{0}, [%p_delta{0}];", pqn + s) << std::endl;
-    iss << format("  mad.wide.u32 %pi{0}, %inc_i{0}, {1}, %pi{0};", pqn + s, 1) << std::endl;
+    iss << format("  mad.wide.s32 %pi{0}, %inc_i{0}, {1}, %pi{0};", pqn + s, 1) << std::endl;
     iss << format("  add.s32 %p_delta{0}, %p_delta{0}, %inc_delta;", pqn + s) << std::endl;
   }
 
