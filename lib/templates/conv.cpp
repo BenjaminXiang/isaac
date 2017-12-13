@@ -791,13 +791,21 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << " // Increment image pointers" << std::endl;
   iss << format("  ld.const.b32 %inc_delta, [%p_inc_delta];") << std::endl;
-  iss << format("  add.s32 %p_inc_delta, %p_inc_delta, %inc_delta;") << std::endl;
-  for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
-  for(size_t s = 0; s < vec_; s++){
-    iss << format("  ld.const.b32 %inc_i{0}, [%p_delta{0}];", pqn + s) << std::endl;
-    iss << format("  mad.wide.s32 %pi{0}, %inc_i{0}, {1}, %pi{0};", pqn + s, 1) << std::endl;
-    iss << format("  add.s32 %p_delta{0}, %p_delta{0}, %inc_delta;", pqn + s) << std::endl;
+  if(upsample_d_== 1 && upsample_h_ == 1 && upsample_w_ == 1){
+    iss << format("  ld.const.b32 %inc_i0, [%p_inc_delta + {}];", 4*nlut) << std::endl;
+    for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
+    for(size_t s = 0; s < vec_; s++)
+        iss << format("  mad.wide.s32 %pi{0}, %inc_i0, {1}, %pi{0};", pqn + s, 1) << std::endl;
   }
+  else{
+    for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
+    for(size_t s = 0; s < vec_; s++){
+      iss << format("  ld.const.b32 %inc_i{0}, [%p_delta{0}];", pqn + s) << std::endl;
+      iss << format("  mad.wide.s32 %pi{0}, %inc_i{0}, {1}, %pi{0};", pqn + s, 1) << std::endl;
+      iss << format("  add.s32 %p_delta{0}, %p_delta{0}, %inc_delta;", pqn + s) << std::endl;
+    }
+  }
+  iss << format("  add.s32 %p_inc_delta, %p_inc_delta, %inc_delta;") << std::endl;
 
   // Swap buffers
   for(char x: std::vector<char>{'i', 'f'}){
@@ -811,21 +819,23 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  setp.lt.s32 %predcrs, %idctrs, %CTRS;") << std::endl;
   iss << format("  setp.gt.s32 %predloop, %CTRS, %bound;") << std::endl;
   // Images
-  iss << format("  ld.const.b32 %inc_mask, [%p_inc_mask];") << std::endl;
+  if(pad_d_ == 0 && pad_h_ == 0 && pad_w_ == 0 && stride_d_ == 1 && stride_h_ == 1 && stride_w_ == 1){
+      for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
+      for(size_t s = 0; s < vec_; s++)
+        iss << format("   and.pred %predi{}, %predi{}, %predcrs;", i + s, i + s) << std::endl;
+  }
+  else{
+    iss << format("  ld.const.b32 %inc_mask, [%p_inc_mask];") << std::endl;
+    iss << format("  @!%predcrs mov.b32 %maskf, 0x0;") << std::endl;
+    for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
+    for(size_t s = 0; s < vec_; s++){
+        iss << format("  add.s32 %p_mask{0}, %p_mask{0}, %inc_mask;", i + s) << std::endl;
+        iss << format("  ld.const.b32 %maski{0}, [%p_mask{0}];", i + s) << std::endl;
+        iss << format("  and.b32 %mask{}, %maskf, %maski{};", i + s, i + s) << std::endl;
+        iss << format("  setp.ne.b32 %predi{}, %mask{}, 0x0;", i + s, i + s, i + s) << std::endl;
+    }
+  }
   iss << format("  add.s32 %p_inc_mask, %p_inc_mask, %inc_mask;") << std::endl;
-  for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-  for(size_t s = 0; s < vec_; s++)
-      iss << format("  add.s32 %p_mask{0}, %p_mask{0}, %inc_mask;", i + s) << std::endl;
-  for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-  for(size_t s = 0; s < vec_; s++)
-      iss << format("  ld.const.b32 %maski{0}, [%p_mask{0}];", i + s) << std::endl;
-  iss << format("  @!%predcrs mov.b32 %maskf, 0x0;") << std::endl;
-  for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-  for(size_t s = 0; s < vec_ ; ++s)
-      iss << format("  and.b32 %mask{}, %maskf, %maski{};", i + s, i + s) << std::endl;
-  for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-  for(size_t s = 0; s < vec_ ; ++s)
-    iss << format("  setp.ne.b32 %predi{}, %mask{}, 0x0;", i + s, i + s, i + s) << std::endl;
 
   iss << " // Load" << std::endl;
   ldg_i();

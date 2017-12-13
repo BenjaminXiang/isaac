@@ -70,7 +70,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
 
   //Initialize input/output buffers
   sc::param_t M, P, Q;
-  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, 1, 1, 1, M, P, Q);
 
 
   std::vector<DTYPE> iO(N*K*P*Q*M);

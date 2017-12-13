@@ -77,62 +77,62 @@ struct SC17{
   static std::vector<conv_params_t> conv(sc::DType dtype){
     // Vector of (dtype, D, W, H, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w)
     std::vector<conv_params_t> shapes;
-    // DeepSpeech
-    for(size_t N: std::vector<size_t>{8})
-      shapes.push_back(std::make_tuple(dtype, 1, 700, 161, 1, N, 32, 1, 5, 20, 0, 0, 0, 1, 1, 1));
-    for(size_t N: std::vector<size_t>{8})
-      shapes.push_back(std::make_tuple(dtype, 1, 341, 79, 32, N, 32, 1, 5, 10, 0, 0, 0, 1, 1, 1));
+//    // DeepSpeech
+//    for(size_t N: std::vector<size_t>{8})
+//      shapes.push_back(std::make_tuple(dtype, 1, 700, 161, 1, N, 32, 1, 5, 20, 0, 0, 0, 1, 1, 1));
+//    for(size_t N: std::vector<size_t>{8})
+//      shapes.push_back(std::make_tuple(dtype, 1, 341, 79, 32, N, 32, 1, 5, 10, 0, 0, 0, 1, 1, 1));
 
-    // OCR
-    shapes.push_back(std::make_tuple(dtype, 1, 480, 48, 1, 16, 16, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 240, 24, 16, 16, 32, 1, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 120, 12, 32, 16, 64, 1, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 60, 6, 64, 16, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    // OCR
+//    shapes.push_back(std::make_tuple(dtype, 1, 480, 48, 1, 16, 16, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 240, 24, 16, 16, 32, 1, 3, 3, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 120, 12, 32, 16, 64, 1, 3, 3, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 60, 6, 64, 16, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
 
-    // Face Recognition
-    shapes.push_back(std::make_tuple(dtype, 1, 108, 108, 3, 8, 64, 1, 3, 3, 0, 1, 1, 1, 2, 2));
-    shapes.push_back(std::make_tuple(dtype, 1, 54, 54, 64, 8, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 27, 27, 128, 8, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 128, 8, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 256, 8, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    // Face Recognition
+//    shapes.push_back(std::make_tuple(dtype, 1, 108, 108, 3, 8, 64, 1, 3, 3, 0, 1, 1, 1, 2, 2));
+//    shapes.push_back(std::make_tuple(dtype, 1, 54, 54, 64, 8, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 27, 27, 128, 8, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 128, 8, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 256, 8, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
 
-    // Vision
-    for(size_t N: std::vector<size_t>{8}){
-      shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, N, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 128, N, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 256, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-    }
-    shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, 16, 64, 1, 7, 7, 0, 3, 3, 1, 2, 2));
-    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 32, 1, 5, 5, 0, 2, 2, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 48, 1, 5, 5, 0, 2, 2, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 192, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 128, 1, 5, 5, 0, 2, 2, 1, 1, 1));
+//    // Vision
+//    for(size_t N: std::vector<size_t>{8}){
+//      shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, N, 64, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 128, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 128, N, 256, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 256, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//    }
+//    shapes.push_back(std::make_tuple(dtype, 1, 224, 224, 3, 16, 64, 1, 7, 7, 0, 3, 3, 1, 2, 2));
+//    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 32, 1, 5, 5, 0, 2, 2, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 192, 16, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 48, 1, 5, 5, 0, 2, 2, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 512, 16, 192, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//    shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 832, 16, 128, 1, 5, 5, 0, 2, 2, 1, 1, 1));
 
-    // Speaker ID
-    shapes.push_back(std::make_tuple(dtype, 1, 350, 80, 64, 16, 128, 1, 5, 5, 0, 1, 1, 1, 2, 2));
-    shapes.push_back(std::make_tuple(dtype, 1, 175, 40, 128, 16, 256, 1, 5, 5, 0, 1, 1, 1, 2, 2));
+//    // Speaker ID
+//    shapes.push_back(std::make_tuple(dtype, 1, 350, 80, 64, 16, 128, 1, 5, 5, 0, 1, 1, 1, 2, 2));
+//    shapes.push_back(std::make_tuple(dtype, 1, 175, 40, 128, 16, 256, 1, 5, 5, 0, 1, 1, 1, 2, 2));
 
-    // ResNET
-    for(size_t N: std::vector<size_t>{8}){
-      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 64, N, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 128, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 128, N, 512, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 128, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 256, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 256, N, 1024, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 1024, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 0, 0, 1, 2, 2));
-      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 2048, 1, 1, 1, 0, 1, 1, 1, 1, 1));
-      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 1, 1, 1, 2, 2));
-    }
+//    // ResNET
+//    for(size_t N: std::vector<size_t>{8}){
+//      shapes.push_back(std::make_tuple(dtype, 1, 112, 112, 64, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 64, N, 256, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 64, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 56, 56, 256, N, 128, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 128, N, 512, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 128, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 256, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 256, N, 1024, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 28, 28, 512, N, 1024, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 0, 0, 1, 2, 2));
+//      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 512, 1, 3, 3, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 7, 7, 512, N, 2048, 1, 1, 1, 0, 1, 1, 1, 1, 1));
+//      shapes.push_back(std::make_tuple(dtype, 1, 14, 14, 1024, N, 2048, 1, 1, 1, 0, 1, 1, 1, 2, 2));
+//    }
 
     // 3D-Unet
     shapes.push_back(std::make_tuple(dtype, 31, 204, 204,   4, 1,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
@@ -278,7 +278,7 @@ void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver:
                     sc::templates::Generator* generator){
 
   param_t M, P, Q;
-  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
   sc::ActivationType activation = sc::Linear;
 
   size_t dtsize = sc::size_of(dtype);
@@ -303,7 +303,7 @@ void benchmark_pool(Metric const & metric, sc::driver::Context& ctx, sc::driver:
                     sc::templates::Generator* generator){
 
   param_t M, P, Q;
-  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+  sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, 1, 1, 1, M, P, Q);
 
   size_t dtsize = sc::size_of(dtype);
   sc::scalar alpha(1., dtype);
@@ -569,7 +569,7 @@ int main(int argc, char* argv[]){
     param_t D = x[0], H = x[1], W = x[2], C = x[3], N = x[4], K = x[5], T = x[6], R = x[7], S = x[8], pad_d = x[9], pad_h = x[10], pad_w = x[11], stride_d = x[12], stride_h = x[13], stride_w = x[14];
     param_t M, P, Q;
     param_t upsample_d = 1, upsample_h = 1, upsample_w = 1;
-    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
     sc::ActivationType activation = sc::Linear;
     if(options->has("search"))
       search_conv(D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, dtype);
@@ -606,7 +606,7 @@ int main(int argc, char* argv[]){
     auto x = pool->get<std::vector<size_t>>("shape");
     param_t D = x[0], W = x[1], H = x[2], N = x[3], K = x[4], T = x[5], R = x[6], S = x[7], pad_d = x[8], pad_h = x[9], pad_w = x[10], stride_d = x[11], stride_h = x[12], stride_w = x[13];
     param_t M, P, Q;
-    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+    sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, 1, 1, 1, M, P, Q);
 
     if(pool->has("kernel")){
       auto x = pool->get<std::vector<size_t>>("kernel");
