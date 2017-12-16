@@ -79,20 +79,16 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   drv::Buffer I(ctx, iI.size()*dtsize);
   srand(0);
   for(size_t i = 0; i < iI.size(); ++i) iI[i] = (float)rand()/RAND_MAX;
-  std::vector<DTYPE> iI_cudnn(iI.size());
-  to_cudnn(iI, iI_cudnn, K, D, H, W, N);
 
   //Ground result (cuDNN)
   drv::Stream stream(ctx);
   stream.write(O, true, 0, iO.size()*dtsize, iO.data());
-  stream.write(I, true, 0, iI.size()*dtsize, iI_cudnn.data());
+  stream.write(I, true, 0, iI.size()*dtsize, iI.data());
   sc::driver::cudnnPool(dtype, stream, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, beta, O);
-  std::vector<DTYPE> rO_cudnn(iO.size());
   std::vector<DTYPE> rO(iO.size());
-  stream.read(O, true, 0, rO_cudnn.size()*dtsize, (void*)rO_cudnn.data());
+  stream.read(O, true, 0, rO.size()*dtsize, (void*)rO.data());
   stream.write(O, true, 0, iO.size()*dtsize, iO.data());
   stream.write(I, true, 0, iI.size()*dtsize, iI.data());
-  from_cudnn(rO_cudnn, rO, N, K, M, P, Q);
 
   //Test ISAAC
   sc::POOL(ctx.device(), stream, dtype, K, M, P, Q, N, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, O);
