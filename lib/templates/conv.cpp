@@ -494,17 +494,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", .reg {}.{} %rc{}", vv, io_dtype, i);
   iss << "){" << std::endl;
   iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
-
-  iss << "// Predicates" << std::endl;
-  for(size_t i = 0 ; i < cs0_ ; i+=inc)
-    iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
-
-  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-  for(size_t s = 0; s < vec_; s+=inc){
-    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", aligned?vv:"", gridz_>1?compute_dtype:io_dtype, i, aligned?"":vs[s]) << std::endl;
-    if(i + s < cs0_ - inc)
-    iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
-  }
   iss << "}" << std::endl;
 
   iss << ".entry " << name << "(" << std::endl
@@ -995,7 +984,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
 
   iss << std::endl;
-  iss << "/* Store result */" << std::endl;
+  iss << "  /* Store result */" << std::endl;
+  iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
 
   iss << "  // Predicates" << std::endl;
   iss << format("  setp.eq.s32 %predz, %idz, 0;") << std::endl;
@@ -1008,18 +998,25 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  mad.wide.s32 %pc{0}, %offc_0, 1, %pc{0};", j) << std::endl;
   }
 
-  iss << "// Pointer deltas along M, P, Q" << std::endl;
+  iss << "  // Pointer deltas along M, P, Q" << std::endl;
   for(size_t i = 0; i < cs0_ - inc; i+=inc)
     iss << format("  sub.s32 %diffc{0}, %offc_{1}, %offc_{0};", i, i + inc) << std::endl;
 
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+  for(size_t s = 0; s < vec_; s+=inc)
+    iss << format("  setp.lt.s32 %predc{}, %offc0_{}, %Npix;", i + s, i*bc0_ + s) << std::endl;
+
   iss << "  // Write back" << std::endl;
   for(size_t j = 0; j < cs1_; j++){
-    iss << format("  @%predk{0} call.uni store_col, (%pc{0}, %Npix", j);
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_) for(size_t s = 0; s < vec_; s++) iss << format(", %offc0_{}", i*bc0_ + s);
-    for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", %diffc{}", i);
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", %rc0_{}_{}", i, j);
-    iss << ");" << std::endl;
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; s+=inc){
+      iss << format("  @%predc{} {}{}.{} [%pc{}], %rc0_{}_{}{};", i + s, gridz_>1?"red.add":"st.global", aligned?vv:"", gridz_>1?compute_dtype:io_dtype, j, i, j, aligned?"":vs[s]) << std::endl;
+      if(i + s < cs0_ - inc)
+        iss << format("  mad.wide.s32 %pc{0}, %diffc{1}, 1, %pc{0};", j, i + s) << std::endl;
+    }
   }
+
+  std::cout << iss.str() << std::endl;
 
 //  iss << "/* Crop-Merge */" << std::endl;
 //  iss << std::endl;
