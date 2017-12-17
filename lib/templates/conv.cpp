@@ -521,7 +521,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _strideFk, .param .b32 _strideFc, .param .b32 _strideFs, " << std::endl
       << "            .param .b64 _bias," << std::endl
       << "            .param .b32 _alpha," << std::endl
-      << "            .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b64 _pz" << std::endl
+      << "            .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b64 _pz, " << std::endl
       << "            .param .b32 _bound)" << std::endl;
   iss << "{" << std::endl;
   // Predicates
@@ -986,6 +986,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  add.u32 %offc0_{0}, %offc0, {0};", i + s) << std::endl;
     iss << format("  div.u32 %offOn{0}, %offc0_{0}, %MPQ;", i + s) << std::endl;
     iss << format("  mad.lo.s32 %offOmpq{0}, %mMPQ, %offOn{0}, %offc0_{0};", i + s) << std::endl;
+  }
+
+  for(size_t i = 0; i < cs0_; i+=vec_)
+  for(size_t s = 0; s < vec_; s++){
     iss << format("  mad.lo.s32 %offc_{0}, %offOn{1}, %strideOn, 0;", i + s, i*bc0_ + s) << std::endl;
     iss << format("  mad.lo.s32 %offc_{0}, %offOmpq{1}, %strideOq, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
   }
@@ -1017,32 +1021,32 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << ");" << std::endl;
   }
 
-  iss << "/* Crop-Merge */" << std::endl;
-  iss << std::endl;
-  for(size_t i = 0; i < cl0; i+=vec_*bc0_)
-  for(size_t s = 0; s < vec_; s++){
-    iss << format("  div.u32 %offZnmp{0}, %offc0_{0}, %Q;", i + s) << std::endl;
-    iss << format("  mad.lo.s32 %offZq{0}, %mQ, %offZnmp{0}, %offZnmpq{0};", i + s) << std::endl;
-    iss << format("  div.u32 %offZmp{0}, %offZnmp{0}, %P;", i + s, Q_) << std::endl;
-    iss << format("  mad.lo.s32 %offZp{0}, %mP, %offZmp{0}, %offZnmp{0};", i + s) << std::endl;
-    iss << format("  div.u32 %offZn{0}, %offZmp{0}, %M;", i + s, P_) << std::endl;
-    iss << format("  mad.lo.s32 %offZm{0}, %mM, %offZn{0}, %offZmp{0};", i + s) << std::endl;
-    iss << format("  add.s32 %offZm{0}, %offZm{0}, %offZm;") << std::endl;
-    iss << format("  add.s32 %offZp{0}, %offZp{0}, %offZp;") << std::endl;
-    iss << format("  add.s32 %offZq{0}, %offZq{0}, %offZq;") << std::endl;
-    iss << format("  mad.lo.s32 %offc_{0}, %offOmpq{1}, %strideOq, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
+//  iss << "/* Crop-Merge */" << std::endl;
+//  iss << std::endl;
+//  for(size_t i = 0; i < cl0; i+=vec_*bc0_)
+//  for(size_t s = 0; s < vec_; s++){
+//    iss << format("  div.u32 %offZnmp{0}, %offc0_{0}, %Q;", i + s) << std::endl;
+//    iss << format("  mad.lo.s32 %offZq{0}, %mQ, %offZnmp{0}, %offZnmpq{0};", i + s) << std::endl;
+//    iss << format("  div.u32 %offZmp{0}, %offZnmp{0}, %P;", i + s, Q_) << std::endl;
+//    iss << format("  mad.lo.s32 %offZp{0}, %mP, %offZmp{0}, %offZnmp{0};", i + s) << std::endl;
+//    iss << format("  div.u32 %offZn{0}, %offZmp{0}, %M;", i + s, P_) << std::endl;
+//    iss << format("  mad.lo.s32 %offZm{0}, %mM, %offZn{0}, %offZmp{0};", i + s) << std::endl;
+//    iss << format("  add.s32 %offZm{0}, %offZm{0}, %offZm;") << std::endl;
+//    iss << format("  add.s32 %offZp{0}, %offZp{0}, %offZp;") << std::endl;
+//    iss << format("  add.s32 %offZq{0}, %offZq{0}, %offZq;") << std::endl;
+//    iss << format("  mad.lo.s32 %offc_{0}, %offOmpq{1}, %strideOq, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
 
-  }
-  for(size_t j = 0; j < cs1_; j++){
-    iss << format("  mad.wide.s32 %pz{0}, %offZk{0}, %strideZk, %pz;", j) << std::endl;
-    iss << format("  mad.wide.s32 %pz{0}, %offZn{0}, %strideZn, %pz{0};", j) << std::endl;
-    iss << format("  mad.wide.s32 %pz{0}, %offZm{0}, %strideZm, %pz{0};", j) << std::endl;
-    iss << format("  mad.wide.s32 %pz{0}, %offZp{0}, %strideZp, %pz{0};", j) << std::endl;
-    iss << format("  mad.wide.s32 %pz{0}, %offZq{0}, %strideZq, %pz{0};", j) << std::endl;
-  }
+//  }
+//  for(size_t j = 0; j < cs1_; j++){
+//    iss << format("  mad.wide.s32 %pz{0}, %offZk{0}, %strideZk, %pz;", j) << std::endl;
+//    iss << format("  mad.wide.s32 %pz{0}, %offZn{0}, %strideZn, %pz{0};", j) << std::endl;
+//    iss << format("  mad.wide.s32 %pz{0}, %offZm{0}, %strideZm, %pz{0};", j) << std::endl;
+//    iss << format("  mad.wide.s32 %pz{0}, %offZp{0}, %strideZp, %pz{0};", j) << std::endl;
+//    iss << format("  mad.wide.s32 %pz{0}, %offZq{0}, %strideZq, %pz{0};", j) << std::endl;
+//  }
 
-  for(size_t i = 0; i < cs0_ - inc; i+=inc)
-    iss << format("  sub.s32 %diffz{0}, %offz_{1}, %offz_{0};", i, i + inc) << std::endl;
+//  for(size_t i = 0; i < cs0_ - inc; i+=inc)
+//    iss << format("  sub.s32 %diffz{0}, %offz_{1}, %offz_{0};", i, i + inc) << std::endl;
 
 
   iss << "}" << std::endl;
