@@ -1193,7 +1193,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // Misc.
   kernel.setArg(48, bound);
   if(gridz_>1)
-    O.set_zero(stream, N_*K_*M_*P_*Q_*dtsize);
+    O.set_zero(stream, N_*(K_ + Zk)*M_*P_*Q_*dtsize);
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
 }
 

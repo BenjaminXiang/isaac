@@ -81,8 +81,6 @@ inline void crop_merge(std::vector<DTYPE> const & x, std::vector<DTYPE> const & 
     size_t Yd = Xd + crop_y_d0 + crop_y_d1;
     size_t Yh = Xh + crop_y_h0 + crop_y_h1;
     size_t Yw = Xw + crop_y_w0 + crop_y_w1;
-
-    std::cout << Xc << std::endl;
     for(size_t n = 0; n < N; ++n)
     for(size_t xc = 0; xc < C ; ++xc)
     for(size_t xd = 0; xd < Xd; ++xd)
@@ -90,12 +88,11 @@ inline void crop_merge(std::vector<DTYPE> const & x, std::vector<DTYPE> const & 
     for(size_t xw = 0; xw < Xw; ++xw){
       size_t yd = xd + crop_y_d0;
       size_t yh = xh + crop_y_h0;
-      size_t yw = xh + crop_y_w0;
+      size_t yw = xw + crop_y_w0;
       size_t idx_x = idx(n, xc, xd, xh, xw, N, Xc, Xd, Xh, Xw);
       size_t idx_y = idx(n, xc - Xc, yd, yh, yw, N, Yc, Yd, Yh, Yw);
       size_t idx_out = idx(n, xc, xd, xh, xw, N, C, Xd, Xh, Xw);
-      out[idx_out] = (xc < Xc)?x[idx_x]:0;
-      if(idx_out == 417339) std::cout << xc  << " " << Xc << " " << xc - Xc << " "  << idx_y << " " << y[idx_y] << " " << out[idx_out] << std::endl;
+      out[idx_out] = (xc < Xc)?x[idx_x]:y[idx_y];
     }
 }
 
@@ -155,7 +152,6 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.write(filters, true, 0, filters_cpu.size()*dtsize, filters_cudnn_cpu.data());
   sc::driver::cudnnConv(dtype, stream, Dup, Hup, Wup, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, upsampled, filters, beta, conv); // conv
   stream.read(conv, true, 0, conv_cpu.size()*dtsize, (void*)conv_cpu.data());
-  std::cout << idx(0,0,29,27,13,N,Zk,Zm,Zp,Zq) << " " << z_cpu[idx(0,0,29,27,13,N,Zk,Zm,Zp,Zq)] << std::endl;
   crop_merge(conv_cpu, z_cpu, output_cpu, N, K, M, P, Q, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1); //crop_merge
 
   // Isaac
