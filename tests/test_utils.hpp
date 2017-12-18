@@ -9,6 +9,11 @@ double max_rounding_error(half_float::half x){ return std::pow(2, int(std::log2(
 
 template<class T>
 bool is_correct(std::vector<T> const & iO, std::vector<T> const & rO, double eps){
+
+  if(iO.size() != rO.size()){
+    std::cout << "inputs don't have the same size" << std::endl;
+    return false;
+  }
   for(size_t i = 0 ; i < iO.size(); ++i){
     T io = iO[i], ro = rO[i];
     if(std::abs((io - ro)/(ro==0?1:ro)) > eps || std::isnan(io)){

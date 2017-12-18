@@ -51,9 +51,9 @@ const size_t Conv::Nparams = Nshapes + Ntune;
 
 Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
            param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
-           ActivationType activation,
+           ActivationType activation, bool crop_merge,
            param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
-  dtype_(dtype), activation_(activation), C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
+  dtype_(dtype), activation_(activation), crop_merge_(crop_merge), C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
   stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
   upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
@@ -492,8 +492,23 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t i = 0; i < cs0_; i++) iss << format(", .reg .b32 %offc{}", i);
   for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", .reg .b32 %diffc{}", i);
   for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", .reg {}.{} %rc{}", vv, io_dtype, i);
+  if(crop_merge_){
+    iss << format(", .reg .b32 %pz_read, .reg .b32 %pz_write") << std::endl;
+    for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", .reg .b32 %diffz{}", i);
+  }
   iss << "){" << std::endl;
   iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
+
+  iss << "// Predicates" << std::endl;
+  for(size_t i = 0 ; i < cs0_ ; i+=inc)
+    iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
+
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+  for(size_t s = 0; s < vec_; s+=inc){
+    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", aligned?vv:"", gridz_>1?compute_dtype:io_dtype, i, aligned?"":vs[s]) << std::endl;
+    if(i + s < cs0_ - inc)
+    iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
+  }
   iss << "}" << std::endl;
 
   iss << ".entry " << name << "(" << std::endl
@@ -510,7 +525,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _strideFk, .param .b32 _strideFc, .param .b32 _strideFs, " << std::endl
       << "            .param .b64 _bias," << std::endl
       << "            .param .b32 _alpha," << std::endl
-      << "            .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b64 _pz, " << std::endl
+      << "            .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b32 _strideZn, .param .b32 _strideZk, .param .b32 _strideZm, .param .b32 _strideZp, .param .b32 _strideZq, .param .b64 _pz," << std::endl
       << "            .param .b32 _bound)" << std::endl;
   iss << "{" << std::endl;
   // Predicates
@@ -984,8 +999,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
 
   iss << std::endl;
-  iss << "  /* Store result */" << std::endl;
-  iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
+  iss << "/* Store result */" << std::endl;
 
   iss << "  // Predicates" << std::endl;
   iss << format("  setp.eq.s32 %predz, %idz, 0;") << std::endl;
@@ -998,53 +1012,52 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  mad.wide.s32 %pc{0}, %offc_0, 1, %pc{0};", j) << std::endl;
   }
 
-  iss << "  // Pointer deltas along M, P, Q" << std::endl;
+  iss << "// Pointer deltas along M, P, Q" << std::endl;
   for(size_t i = 0; i < cs0_ - inc; i+=inc)
     iss << format("  sub.s32 %diffc{0}, %offc_{1}, %offc_{0};", i, i + inc) << std::endl;
 
-  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-  for(size_t s = 0; s < vec_; s+=inc)
-    iss << format("  setp.lt.s32 %predc{}, %offc0_{}, %Npix;", i + s, i*bc0_ + s) << std::endl;
+
+  if(crop_merge_){
+    iss << std::endl;
+    iss << "/* Crop-Merge */" << std::endl;
+    for(size_t i = 0; i < cl0; i+=vec_*bc0_)
+    for(size_t s = 0; s < vec_; s++){
+      iss << format("  div.u32 %offZnmp{0}, %offc0_{0}, %Q;", i + s) << std::endl;
+      iss << format("  mad.lo.s32 %offZq{0}, %mQ, %offZnmp{0}, %offZnmpq{0};", i + s) << std::endl;
+      iss << format("  div.u32 %offZmp{0}, %offZnmp{0}, %P;", i + s, Q_) << std::endl;
+      iss << format("  mad.lo.s32 %offZp{0}, %mP, %offZmp{0}, %offZnmp{0};", i + s) << std::endl;
+      iss << format("  div.u32 %offZn{0}, %offZmp{0}, %M;", i + s, P_) << std::endl;
+      iss << format("  mad.lo.s32 %offZm{0}, %mM, %offZn{0}, %offZmp{0};", i + s) << std::endl;
+      iss << format("  add.s32 %offZm{0}, %offZm{0}, %offZm;") << std::endl;
+      iss << format("  add.s32 %offZp{0}, %offZp{0}, %offZp;") << std::endl;
+      iss << format("  add.s32 %offZq{0}, %offZq{0}, %offZq;") << std::endl;
+      iss << format("  mad.lo.s32 %offz_{0}, %offZn{1}, %strideZn, 0;", i + s, i*bc0_ + s) << std::endl;
+      iss << format("  mad.lo.s32 %offz_{0}, %offZm{1}, %strideZm, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
+      iss << format("  mad.lo.s32 %offz_{0}, %offZp{1}, %strideZp, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
+      iss << format("  mad.lo.s32 %offz_{0}, %offZq{1}, %strideZq, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
+    }
+
+    for(size_t j = 0; j < cs1_; j++){
+      iss << format("  mad.wide.s32 %pz{0}, %offc1_{0}, %strideZk, %pz;", j) << std::endl;
+      iss << format("  mad.wide.s32 %pz{0}, %offz_0, 1, %pz{0};", j) << std::endl;
+    }
+
+    for(size_t i = 0; i < cs0_ - inc; i+=inc)
+      iss << format("  sub.s32 %diffz{0}, %offz_{1}, %offz_{0};", i, i + inc) << std::endl;
+  }
 
   iss << "  // Write back" << std::endl;
   for(size_t j = 0; j < cs1_; j++){
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; s+=inc){
-      iss << format("  @%predc{} {}{}.{} [%pc{}], %rc0_{}_{}{};", i + s, gridz_>1?"red.add":"st.global", aligned?vv:"", gridz_>1?compute_dtype:io_dtype, j, i, j, aligned?"":vs[s]) << std::endl;
-      if(i + s < cs0_ - inc)
-        iss << format("  mad.wide.s32 %pc{0}, %diffc{1}, 1, %pc{0};", j, i + s) << std::endl;
+    iss << format("  @%predk{0} call.uni store_col, (%pc{0}, %Npix", j);
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_) for(size_t s = 0; s < vec_; s++) iss << format(", %offc0_{}", i*bc0_ + s);
+    for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", %diffc{}", i);
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", %rc0_{}_{}", i, j);
+    if(crop_merge_){
+      iss << format(", %pz_read{0}, %pz_write{0}", j) << std::endl;
+      for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", %diffz{}", i);
     }
+    iss << ");" << std::endl;
   }
-
-  std::cout << iss.str() << std::endl;
-
-//  iss << "/* Crop-Merge */" << std::endl;
-//  iss << std::endl;
-//  for(size_t i = 0; i < cl0; i+=vec_*bc0_)
-//  for(size_t s = 0; s < vec_; s++){
-//    iss << format("  div.u32 %offZnmp{0}, %offc0_{0}, %Q;", i + s) << std::endl;
-//    iss << format("  mad.lo.s32 %offZq{0}, %mQ, %offZnmp{0}, %offZnmpq{0};", i + s) << std::endl;
-//    iss << format("  div.u32 %offZmp{0}, %offZnmp{0}, %P;", i + s, Q_) << std::endl;
-//    iss << format("  mad.lo.s32 %offZp{0}, %mP, %offZmp{0}, %offZnmp{0};", i + s) << std::endl;
-//    iss << format("  div.u32 %offZn{0}, %offZmp{0}, %M;", i + s, P_) << std::endl;
-//    iss << format("  mad.lo.s32 %offZm{0}, %mM, %offZn{0}, %offZmp{0};", i + s) << std::endl;
-//    iss << format("  add.s32 %offZm{0}, %offZm{0}, %offZm;") << std::endl;
-//    iss << format("  add.s32 %offZp{0}, %offZp{0}, %offZp;") << std::endl;
-//    iss << format("  add.s32 %offZq{0}, %offZq{0}, %offZq;") << std::endl;
-//    iss << format("  mad.lo.s32 %offc_{0}, %offOmpq{1}, %strideOq, %offc_{0};", i + s, i*bc0_ + s) << std::endl;
-
-//  }
-//  for(size_t j = 0; j < cs1_; j++){
-//    iss << format("  mad.wide.s32 %pz{0}, %offZk{0}, %strideZk, %pz;", j) << std::endl;
-//    iss << format("  mad.wide.s32 %pz{0}, %offZn{0}, %strideZn, %pz{0};", j) << std::endl;
-//    iss << format("  mad.wide.s32 %pz{0}, %offZm{0}, %strideZm, %pz{0};", j) << std::endl;
-//    iss << format("  mad.wide.s32 %pz{0}, %offZp{0}, %strideZp, %pz{0};", j) << std::endl;
-//    iss << format("  mad.wide.s32 %pz{0}, %offZq{0}, %strideZq, %pz{0};", j) << std::endl;
-//  }
-
-//  for(size_t i = 0; i < cs0_ - inc; i+=inc)
-//    iss << format("  sub.s32 %diffz{0}, %offz_{1}, %offz_{0};", i, i + inc) << std::endl;
-
 
   iss << "}" << std::endl;
 
@@ -1054,9 +1067,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, // Conv
                    driver::Buffer const *bias, // Bias
-                   float alpha, // ReLU
-                   int32_t offZm, int32_t offZp, int32_t offZq, driver::Buffer const *Z // Merge
+                   float alpha, // Relu
+                   int32_t Zk, int32_t z_crop_m0, int32_t z_crop_m1, int32_t z_crop_p0, int32_t z_crop_p1, int32_t z_crop_q0, int32_t z_crop_q1, driver::Buffer const *Z // Merge
                    ){
+
   // Data-type size
   int32_t dtsize = size_of(dtype_);
 
@@ -1073,12 +1087,23 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   int32_t strideFr = S_*strideFs;
   int32_t strideFt = R_*strideFr;
   int32_t strideFc = T_*strideFt;
+
   // O strides
   int32_t strideOq = dtsize;
   int32_t strideOp = Q_*strideOq;
   int32_t strideOm = P_*strideOp;
   int32_t strideOk = M_*strideOm;
-  int32_t strideOn = K_*strideOk;
+  int32_t strideOn = (K_ + Zk)*strideOk;
+
+  // Z strides
+  int32_t Zm = M_ + z_crop_m0 + z_crop_m1;
+  int32_t Zp = P_ + z_crop_p0 + z_crop_p1;
+  int32_t Zq = Q_ + z_crop_q0 + z_crop_q1;
+  int32_t strideZq = dtsize;
+  int32_t strideZp = Zq*strideZq;
+  int32_t strideZm = Zp*strideZp;
+  int32_t strideZk = Zm*strideZm;
+  int32_t strideZn = Zk*strideZk;
 
   // Input information
   int32_t MPQ = M_*P_*Q_;
@@ -1156,12 +1181,17 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // ReLU
   kernel.setArg(38, size_of(a.dtype()), a.data());
   // Crop-Merge
-  kernel.setArg(39, offZm);
-  kernel.setArg(40, offZp);
-  kernel.setArg(41, offZq);
-  kernel.setArg(42, Z?*Z:(uint64_t)0);
+  kernel.setArg(39, z_crop_m0);
+  kernel.setArg(40, z_crop_p0);
+  kernel.setArg(41, z_crop_q0);
+  kernel.setArg(42, strideZn);
+  kernel.setArg(43, strideZk);
+  kernel.setArg(44, strideZm);
+  kernel.setArg(45, strideZp);
+  kernel.setArg(46, strideZq);
+  kernel.setArg(47, Z?*Z:(uint64_t)0);
   // Misc.
-  kernel.setArg(43, bound);
+  kernel.setArg(48, bound);
   if(gridz_>1)
     O.set_zero(stream, N_*K_*M_*P_*Q_*dtsize);
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});

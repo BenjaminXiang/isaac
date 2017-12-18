@@ -121,7 +121,7 @@ public:
                           param_t pad_d, param_t pad_h, param_t pad_w,
                           param_t stride_d, param_t stride_h, param_t stride_w,
                           param_t upsample_d, param_t upsample_h, param_t upsample_w,
-                          ActivationType activation, size_t num_re_evaluate = 10);
+                          ActivationType activation, bool crop_merge, size_t num_re_evaluate = 10);
 };
 
 class PoolProfile: public Profile{

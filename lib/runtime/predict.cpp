@@ -186,7 +186,7 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_
                                     param_t pad_d, param_t pad_h, param_t pad_w,
                                     param_t stride_d, param_t stride_h, param_t stride_w,
                                     param_t upsample_d, param_t upsample_h, param_t upsample_w,
-                                    ActivationType activation,
+                                    ActivationType activation, bool crop_merge,
                                     size_t num_re_evaluate)
 {
   driver::Device const & device = stream.context().device();
@@ -198,7 +198,7 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_
     I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(dtype)));
     F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(dtype)));
     benchmark = [&](std::vector<param_t> const& x){
-      templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, isaac::Linear,
+      templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, isaac::Linear, crop_merge,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
       std::string src = generator.dump(device, "kernel");
       driver::Module module(stream.context(), src);
@@ -209,7 +209,7 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType dtype, param_
   std::vector<param_t> shapes{dtype, N*M*P*Q, K, C, T*R*S};
   std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid, benchmark, num_re_evaluate);
   return templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S,
-                         pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation,
+                         pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, crop_merge,
                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
 }
 

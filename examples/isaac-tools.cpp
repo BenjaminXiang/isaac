@@ -277,6 +277,7 @@ void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver:
                     size_t upsample_d, size_t upsample_h, size_t upsample_w,
                     sc::templates::Generator* generator){
 
+  param_t Zk = 0, crop_z_m0 = 0, crop_z_m1 = 0, crop_z_p0 = 0, crop_z_p1 = 0, crop_z_q0 = 0, crop_z_q1 = 0;
   param_t M, P, Q;
   sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
   sc::ActivationType activation = sc::Linear;
@@ -292,7 +293,7 @@ void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::driver::Buffer F(ctx, K*C/vect_c*T*R*S*dtsize);
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, I, F, O, NULL, activation, 0., (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, I, F, O, NULL, activation, 0., Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, NULL, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
   if(sc::driver::dispatch::cudnninit())
     times.push_back(bench([&](){ sc::driver::cudnnConv(dtype, stream, D, H, W, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
   print_results(times, {str(N), str(K), str(M), str(P), str(Q), str(C), str(T), str(R), str(S)}, metric.cmp(), [&](double tsec){ return metric.conv(M, P, Q, K, N, C, T, R, S, tsec);});
@@ -387,7 +388,7 @@ void search_conv(int32_t D, int32_t H, int32_t W,
   std::vector<sc::param_t> rs = {4, 8, 16};
   double best;
   loop_nest<sc::param_t>({rv, rl, rl, rs, rs, rl, rl, r1, rr, rr}, [&](std::vector<sc::param_t> const & x){
-    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, false, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     try{
       std::string src = generator.dump(ctx.device(), "conv");
@@ -575,11 +576,11 @@ int main(int argc, char* argv[]){
       search_conv(D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, dtype);
     if(conv->has("kernel")){
       auto x = conv->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
+      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, false, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
     }
     else{
       sc::runtime::ConvProfile* profile = (sc::runtime::ConvProfile*)sc::runtime::database.at({device.architecture(), sc::runtime::CONV}).get();
-      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation)));
+      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, false)));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);
