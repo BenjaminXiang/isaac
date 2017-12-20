@@ -50,12 +50,13 @@ private:
 public:
   Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
        param_t pad_h, param_t pad_w, param_t pad_d, param_t stride_h, param_t stride_w, param_t stride_d, param_t upsample_d, param_t upsample_h, param_t upsample_w,
-       ActivationType activation, bool crop_merge,
+       ActivationType activation,
+       int32_t Zk, int32_t z_crop_m0, int32_t z_crop_m1, int32_t z_crop_p0, int32_t z_crop_p1, int32_t z_crop_q0, int32_t z_crop_q1,
        param_t vec, param_t bpqn, param_t bk, param_t pqns, param_t ks, param_t crs_l, param_t cs, param_t bc, param_t gridc);
   // Execution
   std::string dump(driver::Device const & device, std::string const & name);
   std::vector<param_t> tuning_params() const;
-  void enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, driver::Buffer const * bias = NULL, float alpha = 0, int32_t Zk = 0, int32_t z_crop_m0 = 0, int32_t z_crop_m1 = 0, int32_t z_crop_p0 = 0, int32_t z_crop_p1 = 0, int32_t z_crop_q0 = 0, int32_t z_crop_q1 = 0, driver::Buffer const *Z = NULL);
+  void enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, driver::Buffer const * bias = NULL, float alpha = 0, driver::Buffer const *Z = NULL);
   // Validity
   static void output_shapes(param_t D, param_t H, param_t W, param_t T, param_t R, param_t S, param_t pad_d,
                             param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
@@ -66,9 +67,21 @@ public:
   static double tflops(param_t P, param_t Q, param_t M, param_t K, param_t N, param_t C, param_t R, param_t S, param_t T, double time);
 
 private:
+  // data type
   DType dtype_;
+  // activation type
   ActivationType activation_;
-  bool crop_merge_;
+  // merge-cropping
+  param_t Zk_;
+  param_t z_crop_m0_;
+  param_t z_crop_m1_;
+  param_t z_crop_p0_;
+  param_t z_crop_p1_;
+  param_t z_crop_q0_;
+  param_t z_crop_q1_;
+  param_t Zm_;
+  param_t Zp_;
+  param_t Zq_;
   //input shapes
   param_t C_;
   param_t N_;

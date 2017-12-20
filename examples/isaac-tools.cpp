@@ -374,6 +374,7 @@ void search_conv(int32_t D, int32_t H, int32_t W,
   size_t Q = (W - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
   size_t M = (D - T + 1 + 2*pad_d + stride_d - 1)/stride_d;
 
+  size_t Zk = 0, crop_z_m0 = 0, crop_z_m1 = 0, crop_z_p0 = 0, crop_z_p1 = 0, crop_z_q0 = 0, crop_z_q1 = 0;
   //Setup
   drv::Buffer O(ctx, K*P*Q*M*N*dtsize);
   drv::Buffer I(ctx, C*H*W*D*N*dtsize);
@@ -388,7 +389,7 @@ void search_conv(int32_t D, int32_t H, int32_t W,
   std::vector<sc::param_t> rs = {4, 8, 16};
   double best;
   loop_nest<sc::param_t>({rv, rl, rl, rs, rs, rl, rl, r1, rr, rr}, [&](std::vector<sc::param_t> const & x){
-    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, false, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     try{
       std::string src = generator.dump(ctx.device(), "conv");
@@ -570,17 +571,18 @@ int main(int argc, char* argv[]){
     param_t D = x[0], H = x[1], W = x[2], C = x[3], N = x[4], K = x[5], T = x[6], R = x[7], S = x[8], pad_d = x[9], pad_h = x[10], pad_w = x[11], stride_d = x[12], stride_h = x[13], stride_w = x[14];
     param_t M, P, Q;
     param_t upsample_d = 1, upsample_h = 1, upsample_w = 1;
+    param_t Zk = 0, crop_z_m0 = 0, crop_z_m1 = 0, crop_z_p0 = 0, crop_z_p1 = 0, crop_z_q0 = 0, crop_z_q1 = 0;
     sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
     sc::ActivationType activation = sc::Linear;
     if(options->has("search"))
       search_conv(D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, dtype);
     if(conv->has("kernel")){
       auto x = conv->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, false, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
+      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
     }
     else{
       sc::runtime::ConvProfile* profile = (sc::runtime::ConvProfile*)sc::runtime::database.at({device.architecture(), sc::runtime::CONV}).get();
-      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, false)));
+      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1)));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);

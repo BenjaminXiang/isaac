@@ -178,7 +178,8 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<int> rgrid = {1, 8};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rs, rs, rl, r1, rgrid, rgrid})){
-    isaac::templates::Conv conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, pz,
+    isaac::templates::Conv conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation,
+                                Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     std::string src;
@@ -192,7 +193,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{
-      conv.enqueue(kernel, stream, image, filters, output, NULL, 0, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
+      conv.enqueue(kernel, stream, image, filters, output, NULL, 0, pz);
     }catch(isaac::driver::exception::cuda::launch_out_of_resources){
       continue;
     }
@@ -227,12 +228,16 @@ int main(){
   std::cout << "===============" << std::endl;
   std::cout << "CONV: FPROP" << std::endl;
   std::cout << "-----------" << std::endl;
-//  do_test<float>(ctx, "core", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-//  do_test<float>(ctx, "upsample", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, 0, 0, 0, 0, 0, 0, 0);
-//  do_test<float>(ctx, "crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
-//  do_test<float>(ctx, "pad", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-//  do_test<float>(ctx, "stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-//  do_test<float>(ctx, "pad + stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float>(ctx, "upsample + pad", 5, 41, 31, 29, 15, 17, 3, 3, 3, 2, 2, 2, 1, 1, 1, 3, 2, 4, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float>(ctx, "core", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float>(ctx, "upsample", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float>(ctx, "crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float>(ctx, "pad", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float>(ctx, "stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float>(ctx, "pad + stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float>(ctx, "vectorized", 5, 41, 36, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float>(ctx, "pad + stride + crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float>(ctx, "upsample + crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float>(ctx, "pad + stride + crop-merge", 5, 41, 31, 29, 15, 17, 1, 1, 1, 5, 1, 2, 6, 3, 4, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float>(ctx, "upsample + crop-merge", 5, 41, 31, 29, 15, 17, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
   std::cout << "-----------" << std::endl;
 }

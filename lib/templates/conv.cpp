@@ -51,14 +51,22 @@ const size_t Conv::Nparams = Nshapes + Ntune;
 
 Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
            param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
-           ActivationType activation, bool crop_merge,
+           ActivationType activation,
+           int32_t Zk, int32_t z_crop_m0, int32_t z_crop_m1, int32_t z_crop_p0, int32_t z_crop_p1, int32_t z_crop_q0, int32_t z_crop_q1,
            param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
-  dtype_(dtype), activation_(activation), crop_merge_(crop_merge), C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
+  dtype_(dtype), activation_(activation),
+  Zk_(Zk), z_crop_m0_(z_crop_m0), z_crop_m1_(z_crop_m1), z_crop_p0_(z_crop_p0), z_crop_p1_(z_crop_p1), z_crop_q0_(z_crop_q0), z_crop_q1_(z_crop_q1),
+  C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
   stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
   upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
   vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(gridz)
 {
+    // Cropping shapes
+    Zm_ = M_ + z_crop_m0_ + z_crop_m1_;
+    Zp_ = P_ + z_crop_p0_ + z_crop_p1_;
+    Zq_ = Q_ + z_crop_q0_ + z_crop_q1_;
+
     // Resize LUT
     size_t block = u_*zs_*bz_;
     size_t Nfilt = T_*R_*S_;
@@ -77,6 +85,12 @@ Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, p
     cLUT.resize(nlut + upsample_d_*upsample_h_*upsample_w_*nlut);
     masks_.resize(nlut + (2*pad_h+1)*(2*pad_w+1)*(2*pad_d+1)*nlut);
     init_constant_memory(cLUT, masks_, nlut, strideIc, strideIw, strideIh, strideId);
+
+    // Sanity check
+    bool has_pad = pad_d > 0 || pad_h > 0 || pad_w > 0;
+    bool has_upsample = upsample_d > 1 || upsample_h > 1 || upsample_w > 1;
+    if(has_pad && has_upsample)
+      throw std::runtime_error("Using both padding and upsampling is not supported at the moment");
 
 }
 
@@ -481,8 +495,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   };
 
-  bool aligned = (M_*P_*Q_) % vec_ == 0 && gridz_==1;
-  size_t inc = aligned?vec_:1;
+  bool c_aligned = (M_*P_*Q_) % vec_ == 0 && gridz_==1;
+  size_t c_inc = c_aligned?vec_:1;
+
+  bool z_aligned = false;
+  size_t z_inc = z_aligned?vec_:1;
 
   iss << ".const .b32 _masks[" << masks_.size() << "];" << std::endl;
   iss << ".const .b32 _LUT[" << cLUT.size() << "];" << std::endl;
@@ -490,17 +507,17 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << std::endl;
   iss << ".func store_col(.reg .b64 %pc, .reg .b32 %Cs0";
   for(size_t i = 0; i < cs0_; i++) iss << format(", .reg .b32 %offc{}", i);
-  for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", .reg .b32 %diffc{}", i);
+  for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", .reg .b32 %diffc{}", i);
   for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", .reg {}.{} %rc{}", vv, io_dtype, i);
   iss << "){" << std::endl;
   iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
   iss << "// Predicates" << std::endl;
-  for(size_t i = 0 ; i < cs0_ ; i+=inc)
+  for(size_t i = 0 ; i < cs0_ ; i+=c_inc)
     iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-  for(size_t s = 0; s < vec_; s+=inc){
-    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", aligned?vv:"", gridz_>1?compute_dtype:io_dtype, i, aligned?"":vs[s]) << std::endl;
-    if(i + s < cs0_ - inc)
+  for(size_t s = 0; s < vec_; s+=c_inc){
+    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", c_aligned?vv:"", gridz_>1?compute_dtype:io_dtype, i, c_aligned?"":vs[s]) << std::endl;
+    if(i + s < cs0_ - c_inc)
     iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
   }
   iss << "}" << std::endl;
@@ -509,23 +526,29 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << std::endl;
   iss << ".func crop_merge_col(.reg .b64 %pz, .reg .b64 %pc, .reg .b32 %Cs0";
   for(size_t i = 0; i < cs0_; i++) iss << format(", .reg .b32 %offc{}", i);
-  for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", .reg .b32 %diffz{}", i);
-  for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", .reg .b32 %diffc{}", i);
+  for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc) iss << format(", .reg .b32 %diffz{}", i);
+  for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", .reg .b32 %diffc{}", i);
   iss << "){" << std::endl;
   iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
     iss << format("  .reg {}.{} %rz{};", vv, io_dtype, i);
 
   iss << "// Predicates" << std::endl;
-  for(size_t i = 0 ; i < cs0_ ; i+=inc)
+  for(size_t i = 0 ; i < cs0_ ; i++)
     iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
-  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-  for(size_t s = 0; s < vec_; s+=inc){
-    iss << format("  @%predc{} ld.global{}.{} %rz{}{}, [%pz];", i + s, aligned?vv:"", io_dtype, i, aligned?"":vs[s]) << std::endl;
-    iss << format("  @%predc{} st.global{}.{} [%pc], %rz{}{};", i + s, aligned?vv:"", io_dtype, i, aligned?"":vs[s]) << std::endl;
-    if(i + s < cs0_ - inc){
-      iss << format("  mad.wide.s32 %pz, %diffz{0}, 1, %pz;", i + s) << std::endl;
-      iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
+
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_){
+    // Load
+    for(size_t s = 0; s < vec_; s+=z_inc){
+      iss << format("  @%predc{} ld.global{}.{} %rz{}{}, [%pz];", i + s, z_aligned?vv:"", io_dtype, i, z_aligned?"":vs[s]) << std::endl;
+      if(i + s < cs0_ - z_inc)
+        iss << format("  mad.wide.s32 %pz, %diffz{0}, 1, %pz;", i + s) << std::endl;
+    }
+    // Concatenate store
+    for(size_t s = 0; s < vec_; s+=c_inc){
+      iss << format("  @%predc{} st.global{}.{} [%pc], %rz{}{};", i + s, c_aligned?vv:"", io_dtype, i, c_aligned?"":vs[s]) << std::endl;
+      if(i + s < cs0_ - c_inc)
+        iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
     }
   }
   iss << "}" << std::endl;
@@ -601,8 +624,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  .reg .b64 %pi{};", i + s) << std::endl;
   for(size_t i = 0; i < cs0_; i++)
     iss << format("  .reg .b32 %offc_{0}, %offz_{0};", i) << std::endl;
-  for(size_t i = 0; i < cs0_ - inc; i+=inc)
-    iss << format("  .reg .b32 %diffc{0}, %diffz{0};", i) << std::endl;
+  for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc)
+    iss << format("  .reg .b32 %diffc{0};", i) << std::endl;
+  for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc)
+    iss << format("  .reg .b32 %diffz{0};", i) << std::endl;
   for(size_t j = 0; j < cs1_; j++)
     iss << format("  .reg .b64 %pc{0}, %pz{0};", j) << std::endl;
   // Scale
@@ -884,6 +909,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t s = 0; s < vec_; ++s)
     iss << format("  sub.s32 %Km{0}, %K, {0};", s) << std::endl;
   ldg_f(true);
+  iss << format("  setp.gt.s32 %predloop, %CTRS, 0;") << std::endl;
   iss << format("  @%predloop bra.uni LOOP;") << std::endl;
   iss << "ENDLOOP:" << std::endl;
 
@@ -1037,21 +1063,21 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
 
   iss << "  // Pointer deltas along M, P, Q" << std::endl;
-  for(size_t i = 0; i < cs0_ - inc; i+=inc)
-    iss << format("  sub.s32 %diffc{0}, %offc_{1}, %offc_{0};", i, i + inc) << std::endl;
+  for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc)
+    iss << format("  sub.s32 %diffc{0}, %offc_{1}, %offc_{0};", i, i + c_inc) << std::endl;
 
   iss << "  // Write back" << std::endl;
   for(size_t j = 0; j < cs1_; j++){
     iss << format("  setp.lt.and.s32 %predk{0}, %offc1_{0}, %K, %predz;", j) << std::endl;
     iss << format("  @%predk{0} call.uni store_col, (%pc{0}, %Npix", j);
     for(size_t i = 0 ; i < cs0_ ; i+=vec_) for(size_t s = 0; s < vec_; s++) iss << format(", %offc0_{}", i*bc0_ + s);
-    for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", %diffc{}", i);
+    for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", %diffc{}", i);
     for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", %rc0_{}_{}", i, j);
     iss << ");" << std::endl;
   }
 
 
-  if(crop_merge_){
+  if(Zk_ > 0){
     iss << std::endl;
     iss << "  /* Crop-Merge */" << std::endl;
     iss << "  ld.param.s32 %strideZn, [_strideZn];" << std::endl;
@@ -1089,8 +1115,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  mad.lo.s32 %offz_{0}, %offZq{1}, %strideZq, %offz_{0};", i + s, i*bc0_ + s) << std::endl;
     }
 
-    for(size_t i = 0; i < cs0_ - inc; i+=inc)
-      iss << format("  sub.s32 %diffz{0}, %offz_{1}, %offz_{0};", i, i + inc) << std::endl;
+    for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc)
+      iss << format("  sub.s32 %diffz{0}, %offz_{1}, %offz_{0};", i, i + z_inc) << std::endl;
 
 
     iss << "  .reg .u32 %inc;" << std::endl;
@@ -1108,8 +1134,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  setp.lt.and.s32 %predk{0}, %offc1_{0}, %Zk, %predz;", j) << std::endl;
       iss << format("  @%predk{0} call.uni crop_merge_col, (%pz{0}, %pc{0}, %Npix", j);
       for(size_t i = 0 ; i < cs0_ ; i+=vec_) for(size_t s = 0; s < vec_; s++) iss << format(", %offc0_{}", i*bc0_ + s);
-      for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", %diffz{}", i);
-      for(size_t i = 0; i < cs0_ - inc; i+=inc) iss << format(", %diffc{}", i);
+      for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc) iss << format(", %diffz{}", i);
+      for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", %diffc{}", i);
       iss << format(");") << std::endl;
       iss << format("  mad.wide.s32 %pz{0}, %inc, %strideZk, %pz{0};", j) << std::endl;
       iss << format("  mad.wide.s32 %pc{0}, %inc, %strideOk, %pc{0};", j) << std::endl;
@@ -1128,7 +1154,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, // Conv
                    driver::Buffer const *bias, // Bias
                    float alpha, // Relu
-                   int32_t Zk, int32_t z_crop_m0, int32_t z_crop_m1, int32_t z_crop_p0, int32_t z_crop_p1, int32_t z_crop_q0, int32_t z_crop_q1, driver::Buffer const *Z // Merge
+                   driver::Buffer const *Z // Merge
                    ){
 
   // Data-type size
@@ -1153,17 +1179,14 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   int32_t strideOp = Q_*strideOq;
   int32_t strideOm = P_*strideOp;
   int32_t strideOk = M_*strideOm;
-  int32_t strideOn = (K_ + Zk)*strideOk;
+  int32_t strideOn = (K_ + Zk_)*strideOk;
 
   // Z strides
-  int32_t Zm = M_ + z_crop_m0 + z_crop_m1;
-  int32_t Zp = P_ + z_crop_p0 + z_crop_p1;
-  int32_t Zq = Q_ + z_crop_q0 + z_crop_q1;
   int32_t strideZq = dtsize;
-  int32_t strideZp = Zq*strideZq;
-  int32_t strideZm = Zp*strideZp;
-  int32_t strideZk = Zm*strideZm;
-  int32_t strideZn = Zk*strideZk;
+  int32_t strideZp = Zq_*strideZq;
+  int32_t strideZm = Zp_*strideZp;
+  int32_t strideZk = Zm_*strideZm;
+  int32_t strideZn = Zk_*strideZk;
 
   // Input information
   int32_t MPQ = M_*P_*Q_;
@@ -1189,6 +1212,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // Last safe filter element
   int32_t last_safe_b = (depth*K_ - 1 - lastj)/K_ - lastctrs;
   int32_t bound = std::max<int32_t>(1, depth - last_safe_b);
+//  std::cout << u_ << " " << bound << std::endl;
 
   // Constant memory
   driver::Buffer LUT = kernel.module().symbol("_LUT");
@@ -1241,10 +1265,10 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // ReLU
   kernel.setArg(38, size_of(a.dtype()), a.data());
   // Crop-Merge
-  kernel.setArg(39, Zk);
-  kernel.setArg(40, z_crop_m0);
-  kernel.setArg(41, z_crop_p0);
-  kernel.setArg(42, z_crop_q0);
+  kernel.setArg(39, Zk_);
+  kernel.setArg(40, z_crop_m0_);
+  kernel.setArg(41, z_crop_p0_);
+  kernel.setArg(42, z_crop_q0_);
   kernel.setArg(43, strideZn);
   kernel.setArg(44, strideZk);
   kernel.setArg(45, strideZm);
@@ -1254,7 +1278,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // Misc.
   kernel.setArg(49, bound);
   if(gridz_>1)
-    O.set_zero(stream, N_*(K_ + Zk)*M_*P_*Q_*dtsize);
+    O.set_zero(stream, N_*(K_ + Zk_)*M_*P_*Q_*dtsize);
   try{
     stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
     stream.synchronize();

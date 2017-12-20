@@ -50,7 +50,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
           param_t upsample_d, param_t upsample_h, param_t upsample_w,
           driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O,
           driver::Buffer const *bias = NULL, ActivationType activation = Linear, float alpha = 0,
-          int32_t Zk = 0, int32_t crop_z_m0 = 0, int32_t crop_z_m1 = 0, int32_t crop_z_p0 = 0, int32_t crop_z_p1 = 0, int32_t crop_z_q0 = 0, int32_t crop_z_q1 = 0, driver::Buffer const *Z = NULL,
+          param_t Zk = 0, param_t crop_z_m0 = 0, param_t crop_z_m1 = 0, param_t crop_z_p0 = 0, param_t crop_z_p1 = 0, param_t crop_z_q0 = 0, param_t crop_z_q1 = 0, driver::Buffer const *Z = NULL,
           templates::Conv* generator = NULL);
 
 
