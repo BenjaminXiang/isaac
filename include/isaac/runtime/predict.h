@@ -117,7 +117,7 @@ private:
 class ConvProfile: public Profile{
 public:
   ConvProfile(u_char* data);
-  templates::Conv predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+  templates::Conv predict(driver::Stream& stream, DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
                           param_t pad_d, param_t pad_h, param_t pad_w,
                           param_t stride_d, param_t stride_h, param_t stride_w,
                           param_t upsample_d, param_t upsample_h, param_t upsample_w,

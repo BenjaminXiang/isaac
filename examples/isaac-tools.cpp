@@ -271,7 +271,7 @@ void benchmark_gemm(Metric const & metric, sc::driver::Context& ctx, sc::driver:
 }
 
 void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver::Device& device, sc::driver::Stream& stream,
-                    sc::DType dtype, size_t D, size_t H, size_t W, size_t C, size_t N, size_t K, size_t T, size_t R, size_t S,
+                    sc::DType in_dtype, sc::DType out_dtype, size_t D, size_t H, size_t W, size_t C, size_t N, size_t K, size_t T, size_t R, size_t S,
                     size_t pad_d, size_t pad_h, size_t pad_w,
                     size_t stride_d, size_t stride_h, size_t stride_w,
                     size_t upsample_d, size_t upsample_h, size_t upsample_w,
@@ -282,20 +282,19 @@ void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
   sc::ActivationType activation = sc::Linear;
 
-  size_t dtsize = sc::size_of(dtype);
-  size_t vect_c = (dtype==sc::INT8X4_TYPE)?4:1;
-  sc::DType ab_dtype = (dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:dtype;
+  size_t vect_c = (in_dtype==sc::INT8X4_TYPE)?4:1;
+  sc::DType ab_dtype = (out_dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:out_dtype;
   sc::scalar alpha(1., ab_dtype);
   sc::scalar beta(0., ab_dtype);
 
-  sc::driver::Buffer O(ctx, N*K*M*P*Q*dtsize);
-  sc::driver::Buffer I(ctx, C/vect_c*D*H*W*N*dtsize);
-  sc::driver::Buffer F(ctx, K*C/vect_c*T*R*S*dtsize);
+  sc::driver::Buffer O(ctx, N*K*M*P*Q*sc::size_of(out_dtype));
+  sc::driver::Buffer I(ctx, C/vect_c*D*H*W*N*sc::size_of(in_dtype));
+  sc::driver::Buffer F(ctx, K*C/vect_c*T*R*S*sc::size_of(in_dtype));
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::CONV(device, stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, I, F, O, NULL, activation, 0., Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, NULL, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::CONV(device, stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, I, F, O, NULL, activation, 0., Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, NULL, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
   if(sc::driver::dispatch::cudnninit())
-    times.push_back(bench([&](){ sc::driver::cudnnConv(dtype, stream, D, H, W, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
+    times.push_back(bench([&](){ sc::driver::cudnnConv(out_dtype, stream, D, H, W, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
   print_results(times, {str(N), str(K), str(M), str(P), str(Q), str(C), str(T), str(R), str(S)}, metric.cmp(), [&](double tsec){ return metric.conv(M, P, Q, K, N, C, T, R, S, tsec);});
 }
 
@@ -365,10 +364,9 @@ void search_conv(int32_t D, int32_t H, int32_t W,
                  int32_t pad_d, int32_t pad_h, int32_t pad_w,
                  int32_t stride_d, int32_t stride_h, int32_t stride_w,
                  int32_t upsample_d, int32_t upsample_h, int32_t upsample_w,
-                 sc::ActivationType activation, sc::DType dtype)
+                 sc::ActivationType activation, sc::DType in_dtype, sc::DType out_dtype)
 {
   auto ctx = drv::backend::contexts::get_default();
-  size_t dtsize = sc::size_of(dtype);
 
   size_t P = (H - R + 1 + 2*pad_h + stride_h - 1)/stride_h;
   size_t Q = (W - S + 1 + 2*pad_w + stride_w - 1)/stride_w;
@@ -376,9 +374,9 @@ void search_conv(int32_t D, int32_t H, int32_t W,
 
   size_t Zk = 0, crop_z_m0 = 0, crop_z_m1 = 0, crop_z_p0 = 0, crop_z_p1 = 0, crop_z_q0 = 0, crop_z_q1 = 0;
   //Setup
-  drv::Buffer O(ctx, K*P*Q*M*N*dtsize);
-  drv::Buffer I(ctx, C*H*W*D*N*dtsize);
-  drv::Buffer F(ctx, C*R*S*T*K*dtsize);
+  drv::Buffer O(ctx, K*P*Q*M*N*sc::size_of(out_dtype));
+  drv::Buffer I(ctx, C*H*W*D*N*sc::size_of(in_dtype));
+  drv::Buffer F(ctx, C*R*S*T*K*sc::size_of(in_dtype));
   drv::Stream stream(ctx);
 
   //Exhaustive search
@@ -389,7 +387,7 @@ void search_conv(int32_t D, int32_t H, int32_t W,
   std::vector<sc::param_t> rs = {4, 8, 16};
   double best;
   loop_nest<sc::param_t>({rv, rl, rl, rs, rs, rl, rl, r1, rr, rr}, [&](std::vector<sc::param_t> const & x){
-    sc::templates::Conv generator(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+    sc::templates::Conv generator(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     try{
       std::string src = generator.dump(ctx.device(), "conv");
@@ -567,6 +565,8 @@ int main(int argc, char* argv[]){
 
   // CONV
   if(options->has("conv")){
+    sc::DType in_dtype = dtype;
+    sc::DType out_dtype = dtype;
     auto x = conv->get<std::vector<size_t>>("shape");
     param_t D = x[0], H = x[1], W = x[2], C = x[3], N = x[4], K = x[5], T = x[6], R = x[7], S = x[8], pad_d = x[9], pad_h = x[10], pad_w = x[11], stride_d = x[12], stride_h = x[13], stride_w = x[14];
     param_t M, P, Q;
@@ -575,14 +575,14 @@ int main(int argc, char* argv[]){
     sc::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
     sc::ActivationType activation = sc::Linear;
     if(options->has("search"))
-      search_conv(D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, dtype);
+      search_conv(D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, in_dtype, out_dtype);
     if(conv->has("kernel")){
       auto x = conv->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::Conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
+      generator.reset(new sc::templates::Conv(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]));
     }
     else{
       sc::runtime::ConvProfile* profile = (sc::runtime::ConvProfile*)sc::runtime::database.at({device.architecture(), sc::runtime::CONV}).get();
-      generator.reset(new sc::templates::Conv(profile->predict(stream, dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1)));
+      generator.reset(new sc::templates::Conv(profile->predict(stream, in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1)));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);
@@ -599,7 +599,7 @@ int main(int argc, char* argv[]){
       //Print results
       for(auto x: shapes){
         std::tie(dtype, D, W, H, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w) = x;
-        benchmark_conv(*metric, context, device, stream, dtype, D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, conv->has("kernel")?generator.get():NULL);
+        benchmark_conv(*metric, context, device, stream, in_dtype, out_dtype, D, H, W, C, N, K, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, conv->has("kernel")?generator.get():NULL);
       }
     }
   }

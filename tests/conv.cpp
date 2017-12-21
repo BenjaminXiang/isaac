@@ -97,7 +97,7 @@ inline void crop_merge(std::vector<DTYPE> const & x, std::vector<DTYPE> const & 
 }
 
 
-template<class DTYPE>
+template<class IN_DTYPE, class OUT_DTYPE>
 void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D, size_t H, size_t W, size_t C, size_t T, size_t R, size_t S,
                   size_t pad_d, size_t pad_h, size_t pad_w,
                   size_t stride_d, size_t stride_h, size_t stride_w,
@@ -105,14 +105,17 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
                   size_t Zk, size_t crop_z_m0, size_t crop_z_m1, size_t crop_z_p0, size_t crop_z_p1, size_t crop_z_q0, size_t crop_z_q1)
 {
   srand(0);
-  sc::DType dtype = sc::to_DType<DTYPE>::value;
-  size_t dtsize = sc::size_of(dtype);
+  sc::DType in_dtype = sc::to_DType<IN_DTYPE>::value;
+  sc::DType out_dtype = sc::to_DType<OUT_DTYPE>::value;
+
+  size_t in_dtsize = sc::size_of(in_dtype);
+  size_t out_dtsize = sc::size_of(out_dtype);
+
   sc::ActivationType activation = sc::Linear;
   drv::Stream stream(ctx);
 
   //alpha, beta are not half-precision
-  sc::DType ab_dtype = (dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:dtype;
-  sc::scalar alpha(1., ab_dtype), beta(0., ab_dtype);
+  sc::scalar alpha(1., sc::FLOAT_TYPE), beta(0., sc::FLOAT_TYPE);
 
   // Shapes
   sc::param_t M, P, Q;
@@ -123,15 +126,15 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   sc::param_t Zq = Q + crop_z_q0 + crop_z_q1;
 
   // CPU buffers
-  size_t vect_c = (dtype==sc::INT8X4_TYPE)?4:1;
-  std::vector<DTYPE> image_c(N*C/vect_c*H*W*D);
-  std::vector<DTYPE> upsampled_c(N*C/vect_c*Hup*Wup*Dup);
-  std::vector<DTYPE> filters_c(K*C/vect_c*R*S*T);
-  std::vector<DTYPE> filters_cudnn_c(filters_c.size());
-  std::vector<DTYPE> conv_c(N*K*M*P*Q);
-  std::vector<DTYPE> z_c(N*Zk*Zm*Zp*Zq);
-  std::vector<DTYPE> ground_truth_c(N*(K + Zk)*M*P*Q);
-  std::vector<DTYPE> output_isaac_c(ground_truth_c);
+  size_t vect_c = (in_dtype==sc::INT8X4_TYPE)?4:1;
+  std::vector<IN_DTYPE> image_c(N*C/vect_c*H*W*D);
+  std::vector<IN_DTYPE> upsampled_c(N*C/vect_c*Hup*Wup*Dup);
+  std::vector<IN_DTYPE> filters_c(K*C/vect_c*R*S*T);
+  std::vector<IN_DTYPE> filters_cudnn_c(filters_c.size());
+  std::vector<OUT_DTYPE> conv_c(N*K*M*P*Q);
+  std::vector<OUT_DTYPE> z_c(N*Zk*Zm*Zp*Zq);
+  std::vector<OUT_DTYPE> ground_truth_c(N*(K + Zk)*M*P*Q);
+  std::vector<OUT_DTYPE> output_isaac_c(ground_truth_c);
   // Initialize
   for(size_t i = 0; i < z_c.size(); ++i)
     z_c[i] = (float)rand()/RAND_MAX;
@@ -142,34 +145,34 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   to_cudnn(filters_c, filters_cudnn_c, C/vect_c, T, R, S, K);
 
   // GPU buffers
-  drv::Buffer image(ctx, image_c.size()*dtsize);
-  drv::Buffer upsampled(ctx, upsampled_c.size()*dtsize);
-  drv::Buffer filters(ctx, filters_c.size()*dtsize);
-  drv::Buffer conv(ctx, conv_c.size()*dtsize);
-  drv::Buffer output(ctx, ground_truth_c.size()*dtsize);
-  drv::Buffer z(ctx, std::max<int>(1, z_c.size()*dtsize));
+  drv::Buffer image(ctx, image_c.size()*in_dtsize);
+  drv::Buffer upsampled(ctx, upsampled_c.size()*in_dtsize);
+  drv::Buffer filters(ctx, filters_c.size()*in_dtsize);
+  drv::Buffer conv(ctx, conv_c.size()*out_dtsize);
+  drv::Buffer output(ctx, ground_truth_c.size()*out_dtsize);
+  drv::Buffer z(ctx, std::max<int>(1, z_c.size()*out_dtsize));
   drv::Buffer* pz = Zk>0?&z:NULL;
 
   // Ground truth
   // upsample
   upsample(image_c, upsampled_c, N, C, D, H, W, upsample_d, upsample_h, upsample_w);
-  stream.write(upsampled, true, 0, upsampled_c.size()*dtsize, upsampled_c.data());
-  stream.write(filters, true, 0, filters_c.size()*dtsize, filters_cudnn_c.data());
+  stream.write(upsampled, true, 0, upsampled_c.size()*in_dtsize, upsampled_c.data());
+  stream.write(filters, true, 0, filters_c.size()*in_dtsize, filters_cudnn_c.data());
   // conv
-  sc::driver::cudnnConv(dtype, stream, Dup, Hup, Wup, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, upsampled, filters, beta, conv);
-  stream.read(conv, true, 0, conv_c.size()*dtsize, (void*)conv_c.data());
+  sc::driver::cudnnConv(in_dtype, stream, Dup, Hup, Wup, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, upsampled, filters, beta, conv);
+  stream.read(conv, true, 0, conv_c.size()*out_dtsize, (void*)conv_c.data());
   // crop-merge
   crop_merge(conv_c, z_c, ground_truth_c, N, K, M, P, Q, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1); //crop_merge
 
   // Isaac
-  stream.write(image, true, 0, image_c.size()*dtsize, image_c.data());
-  stream.write(filters, true, 0, filters_c.size()*dtsize, filters_c.data());
-  stream.write(z, true, 0, z_c.size()*dtsize, z_c.data());
-  sc::CONV(ctx.device(), stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, image, filters, output, NULL, activation, 0, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
-  stream.read(output, true, 0, output_isaac_c.size()*dtsize, (void*)output_isaac_c.data());
+  stream.write(image, true, 0, image_c.size()*in_dtsize, image_c.data());
+  stream.write(filters, true, 0, filters_c.size()*in_dtsize, filters_c.data());
+  stream.write(z, true, 0, z_c.size()*out_dtsize, z_c.data());
+  sc::CONV(ctx.device(), stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, image, filters, output, NULL, activation, 0, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
+  stream.read(output, true, 0, output_isaac_c.size()*out_dtsize, (void*)output_isaac_c.data());
 
   // Check correctness
-  if(!is_correct(output_isaac_c, ground_truth_c, max_rounding_error(DTYPE(C))))
+  if(!is_correct(output_isaac_c, ground_truth_c, max_rounding_error(float(C))))
     exit(EXIT_FAILURE);
 
   std::vector<int> rv = {1, 2, 4};
@@ -178,7 +181,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<int> rgrid = {1, 8};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rs, rs, rl, r1, rgrid, rgrid})){
-    isaac::templates::Conv conv(dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation,
+    isaac::templates::Conv conv(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation,
                                 Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
@@ -198,15 +201,15 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
       continue;
     }
     //Test
-    stream.read(output, true, 0, output_isaac_c.size()*dtsize, (void*)output_isaac_c.data());
+    stream.read(output, true, 0, output_isaac_c.size()*out_dtsize, (void*)output_isaac_c.data());
     size_t depth = x[6]*x[7]*x[8];
-    double eps = max_rounding_error(DTYPE(C/depth))*depth;
+    double eps = max_rounding_error(float(C/depth))*depth;
     if(!is_correct(output_isaac_c, ground_truth_c, eps))
       exit(EXIT_FAILURE);
   }
 }
 
-template<class DTYPE>
+template<class IN_DTYPE, class OUT_DTYPE>
 int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t N, size_t K, size_t D, size_t H, size_t W, size_t C, size_t T, size_t R, size_t S,
             size_t pad_d, size_t pad_h, size_t pad_w,
             size_t stride_d, size_t stride_h, size_t stride_w,
@@ -217,7 +220,7 @@ int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t 
   std::cout << "(";
   std::copy(params.begin(), params.end(), std::ostream_iterator<size_t>(std::cout, ", "));
   std::cout << "\b\b) [" << prefix << "]" << std::endl;
-  do_test_impl<DTYPE>(ctx, N, K, D, H, W, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
+  do_test_impl<IN_DTYPE, OUT_DTYPE>(ctx, N, K, D, H, W, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
   return EXIT_SUCCESS;
 }
 
@@ -228,16 +231,16 @@ int main(){
   std::cout << "===============" << std::endl;
   std::cout << "CONV: FPROP" << std::endl;
   std::cout << "-----------" << std::endl;
-  do_test<float>(ctx, "core", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float>(ctx, "upsample", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float>(ctx, "crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float>(ctx, "pad", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float>(ctx, "stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float>(ctx, "pad + stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float>(ctx, "vectorized", 5, 41, 36, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float>(ctx, "pad + stride + crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float>(ctx, "upsample + crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float>(ctx, "pad + stride + crop-merge", 5, 41, 31, 29, 15, 17, 1, 1, 1, 5, 1, 2, 6, 3, 4, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float>(ctx, "upsample + crop-merge", 5, 41, 31, 29, 15, 17, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "core", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "upsample", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "pad", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "pad + stride", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "vectorized", 5, 41, 36, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "pad + stride + crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "upsample + crop-merge", 5, 41, 31, 29, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "pad + stride + crop-merge", 5, 41, 31, 29, 15, 17, 1, 1, 1, 5, 1, 2, 6, 3, 4, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "upsample + crop-merge", 5, 41, 31, 29, 15, 17, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 77, 1, 3, 5, 4, 2, 6);
   std::cout << "-----------" << std::endl;
 }

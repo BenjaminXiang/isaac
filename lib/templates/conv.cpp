@@ -49,12 +49,12 @@ const size_t Conv::Nshapes = 5;
 const size_t Conv::Ntune = 9;
 const size_t Conv::Nparams = Nshapes + Ntune;
 
-Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
            param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
            ActivationType activation,
            int32_t Zk, int32_t z_crop_m0, int32_t z_crop_m1, int32_t z_crop_p0, int32_t z_crop_p1, int32_t z_crop_q0, int32_t z_crop_q1,
            param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
-  dtype_(dtype), activation_(activation),
+  in_dtype_(in_dtype), out_dtype_(out_dtype), activation_(activation),
   Zk_(Zk), z_crop_m0_(z_crop_m0), z_crop_m1_(z_crop_m1), z_crop_p0_(z_crop_p0), z_crop_p1_(z_crop_p1), z_crop_q0_(z_crop_q0), z_crop_q1_(z_crop_q1),
   C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
@@ -73,7 +73,7 @@ Conv::Conv(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, p
     size_t nlut = (block + Nfilt - 1)/Nfilt * Nfilt;
 
     // Data-type size
-    int32_t dtsize = size_of(dtype_);
+    int32_t dtsize = size_of(in_dtype_);
 
     // I strides
     int32_t strideIw = dtsize;
@@ -248,9 +248,9 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
 std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   std::stringstream iss;
-  size_t dtsize = size_of(dtype_);
-  std::string compute_dtype = arith_str(dtype_);
-  std::string io_dtype = io_str(dtype_);
+  size_t dtsize = size_of(in_dtype_);
+  std::string compute_dtype = arith_str(in_dtype_);
+  std::string io_dtype = io_str(in_dtype_);
   size_t cl0 = bc0_*cs0_;
   size_t cl1 = cs1_*bc1_;
   size_t zl = zs_*bz_;
@@ -278,7 +278,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   size_t bf_pqn = bf_k;
 
   uint8_t is_valid;
-  uint32_t params[] = {dtype_, N_*P_*Q_*M_, K_, C_, R_*S_*T_, vec_, bc0_, bc1_, cs0_, cs1_, u_, zs_, bz_, gridz_};
+  uint32_t params[] = {in_dtype_, N_*P_*Q_*M_, K_, C_, R_*S_*T_, vec_, bc0_, bc1_, cs0_, cs1_, u_, zs_, bz_, gridz_};
   check_valid(device, 1, params, &is_valid);
   if(!is_valid)
     throw invalid_parameters();
@@ -487,7 +487,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       std::string ro = format("%rc{}_{}_{}{}", c, i, k + kk, vs[ii]);
       std::string ri = format("%ri{}_{}_{}{}", c, i, cc, vs[ii]);
       std::string rf = format("%rf{}_{}_{}{}", c, k, cc, vs[kk]);
-      if(dtype_==INT8X4_TYPE)
+      if(in_dtype_==INT8X4_TYPE)
         iss << format("  dp4a.{0}.{0} {1}, {2}, {3}, {1};", compute_dtype, ro, ri, rf) << std::endl;
       else
         iss << format("  fma.rn.{0} {1}, {2}, {3}, {1};", compute_dtype, ro, ri, rf) << std::endl;
@@ -965,7 +965,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-  if(dtype_==INT8X4_TYPE){
+  if(in_dtype_==INT8X4_TYPE){
     iss << "/* Convert to FP32 */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
@@ -1021,7 +1021,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-  if(dtype_==INT8X4_TYPE){
+  if(in_dtype_==INT8X4_TYPE){
     iss << "/* Quantize */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
@@ -1158,7 +1158,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    ){
 
   // Data-type size
-  int32_t dtsize = size_of(dtype_);
+  int32_t dtsize = size_of(in_dtype_);
 
   // I strides
   int32_t strideIw = dtsize;

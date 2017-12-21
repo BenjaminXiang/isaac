@@ -56,7 +56,7 @@ void GEMM(driver::Device const & device, driver::Stream & stream,
 }
 
 void CONV(driver::Device const & device, driver::Stream & stream,
-          DType dtype, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t C, param_t T, param_t R, param_t S,
+          DType in_dtype, DType out_dtype, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t C, param_t T, param_t R, param_t S,
           param_t D, param_t H, param_t W,
           param_t pad_d, param_t pad_h, param_t pad_w,
           param_t stride_d, param_t stride_h, param_t stride_w,
@@ -66,19 +66,20 @@ void CONV(driver::Device const & device, driver::Stream & stream,
           param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
           templates::Conv* generator)
 {
-  size_t vect_c = (dtype==INT8X4_TYPE)?4:1;
+  size_t vect_c = (in_dtype==INT8X4_TYPE)?4:1;
   if(C % vect_c != 0)
     throw std::runtime_error("Number of channels must be a multiple of VECT_C");
   C /= vect_c;
 
-  typedef std::tuple<driver::Stream, DType, std::vector<param_t>> key_type;
+  typedef std::tuple<driver::Stream, DType, DType, std::vector<param_t>> key_type;
   // Build the generator if necessary
   static cpp::CachedMap<key_type, std::shared_ptr<templates::Conv>> inference([&](key_type const & key){
     runtime::ConvProfile* profile = (runtime::ConvProfile*)runtime::database.at({device.architecture(), runtime::CONV}).get();
     driver::Stream & stream = (driver::Stream&)std::get<0>(key);
-    DType dtype = std::get<1>(key);
-    std::vector<param_t> const & x = std::get<2>(key);
-    templates::Conv result = profile->predict(stream, dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], x[23], x[24], x[25], x[26], x[27], x[28]);
+    DType in_dtype = std::get<1>(key);
+    DType out_dtype = std::get<2>(key);
+    std::vector<param_t> const & x = std::get<3>(key);
+    templates::Conv result = profile->predict(stream, in_dtype, out_dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], x[23], x[24], x[25], x[26], x[27], x[28]);
     return std::make_shared<templates::Conv>(result);
   });
 
@@ -91,7 +92,7 @@ void CONV(driver::Device const & device, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
-    generator = inference.get(key_type(stream, dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
+    generator = inference.get(key_type(stream, in_dtype, out_dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
 
   generator->enqueue(*kernels.get(generator), stream,  I, F, O, bias, alpha, Z);
 }
