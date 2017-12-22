@@ -71,8 +71,16 @@ void export_templates(py::module&& m){
 
 
   py::class_<tpt::Conv>(m, "Conv")
-      .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
-                    param_t,param_t,param_t,param_t,param_t,sc::ActivationType,param_t,param_t,param_t,param_t, param_t, param_t, param_t, param_t, param_t>())
+      .def(py::init<
+                 sc::DType, sc::DType,
+                  param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, //shapes
+                  param_t, param_t, param_t, //pad
+                  param_t, param_t, param_t, //stride
+                  param_t, param_t, param_t, //upsample
+                  sc::ActivationType,
+                  param_t, param_t, param_t, param_t, param_t, param_t, param_t, //Crop-merge
+                  param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t // Tuning
+                 >())
       .def("dump", &tpt::Conv::dump)
       .def("enqueue", &tpt::Conv::enqueue)
       .def_static("check_valid", check_valid<tpt::Conv>)

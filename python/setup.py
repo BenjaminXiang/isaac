@@ -31,17 +31,17 @@ def main():
                     include_dirs=include + [os.path.join('src', 'bind')])]
 
     # Tensorflow
-    try:
-      import tensorflow as tf
-      tf_include = tf.sysconfig.get_include()
-      extensions += [Extension('_tensorflow',
-                               sources=[os.path.join('src', 'extensions', 'tensorflow.cpp')],
-                               libraries = ['tensorflow_framework'],
-                               extra_compile_args= flags,
-                               include_dirs = include + [tf_include, os.path.join(tf_include, 'external', 'nsync', 'public')],
-                               library_dirs = [tf.sysconfig.get_lib()])]
-    except ImportError:
-      pass
+    # try:
+    #   import tensorflow as tf
+    #   tf_include = tf.sysconfig.get_include()
+    #   extensions += [Extension('_tensorflow',
+    #                            sources=[os.path.join('src', 'extensions', 'tensorflow.cpp')],
+    #                            libraries = ['tensorflow_framework'],
+    #                            extra_compile_args= flags,
+    #                            include_dirs = include + [tf_include, os.path.join(tf_include, 'external', 'nsync', 'public')],
+    #                            library_dirs = [tf.sysconfig.get_lib()])]
+    # except ImportError:
+    #   pass
 
     # Pytorch
     try:

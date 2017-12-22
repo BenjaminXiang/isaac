@@ -12,9 +12,13 @@ inline isaac::ActivationType sc_activation(const std::string & activation){
     throw std::runtime_error("Unknown activation function");
 }
 
-int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *bias, THCudaTensor *outputs,
+int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *outputs,
+                  size_t upsample_d, size_t upsample_h, size_t upsample_w,
+                  size_t pad_d, size_t pad_h, size_t pad_w,
+                  size_t stride_d, size_t stride_h, size_t stride_w,
+                  THCudaTensor *bias,
                   const char * activation, float alpha,
-                  size_t pad_d, size_t pad_h, size_t pad_w, size_t stride_d, size_t stride_h, size_t stride_w)
+                  THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   int DIM = THCudaTensor_nDimension(state, inputs) - 2;
 
@@ -43,7 +47,7 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *bia
 
   // Output shapes
   isaac::param_t M, P, Q;
-  isaac::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q);
+  isaac::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
 
   // Create output
   long output_sizes[5];
@@ -54,13 +58,27 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *bia
   if(DIM > 0) output_sizes[2 + (DIM > 2) + (DIM > 1)] = Q;
   THCudaTensor_resizeNd(state, outputs, 2 + DIM, output_sizes, NULL);
 
-  // Execute convolution
+  // Wrap handles
   isaac::driver::Stream stream(THCState_getCurrentStream(state), false);
   isaac::driver::Buffer I(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, inputs)->data, false);
   isaac::driver::Buffer F(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, filters)->data, false);
-  isaac::driver::Buffer Bias(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, bias)->data, false);
   isaac::driver::Buffer O(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, outputs)->data, false);
-  isaac::CONV(stream.context().device(), stream, dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, F, O, &Bias, sc_activation(activation), alpha);
+  isaac::driver::Buffer Bias(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, bias)->data, false);
+  std::unique_ptr<isaac::driver::Buffer> Z;
+  size_t Zk = 0;
+  if(z){
+    Z.reset(new isaac::driver::Buffer(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, z)->data, false));
+    Zk = THCudaTensor_size(state, inputs, 1);
+  }
+
+  // Execute convolution
+  isaac::CONV(stream.context().device(), stream, dtype, dtype, N, K, M, P, Q, C, T, R, S, D, H, W,
+              pad_d, pad_h, pad_w, stride_d,
+              stride_h, stride_w, upsample_d,
+              upsample_h, upsample_w, I, F, O,
+              &Bias,
+              sc_activation(activation), alpha,
+              Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
 
   return 1;
 }

@@ -52,7 +52,7 @@ const size_t Conv::Nparams = Nshapes + Ntune;
 Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
            param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
            ActivationType activation,
-           int32_t Zk, int32_t z_crop_m0, int32_t z_crop_m1, int32_t z_crop_p0, int32_t z_crop_p1, int32_t z_crop_q0, int32_t z_crop_q1,
+           param_t Zk, param_t z_crop_m0, param_t z_crop_m1, param_t z_crop_p0, param_t z_crop_p1, param_t z_crop_q0, param_t z_crop_q1,
            param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
   in_dtype_(in_dtype), out_dtype_(out_dtype), activation_(activation),
   Zk_(Zk), z_crop_m0_(z_crop_m0), z_crop_m1_(z_crop_m1), z_crop_p0_(z_crop_p0), z_crop_p1_(z_crop_p1), z_crop_q0_(z_crop_q0), z_crop_q1_(z_crop_q1),

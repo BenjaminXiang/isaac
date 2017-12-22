@@ -11,7 +11,7 @@ class ConvNdFunction(Function):
 
     def forward(self, input, weight, bias):
         output = input.new()
-        isaac_conv_nd(input.cuda(), weight.cuda(), bias.cuda(), output.cuda(), self.activation, self.alpha, 0, 0, 0, 1, 1, 1)
+        isaac_conv_nd(input.cuda(), weight.cuda(), bias.cuda(), output.cuda(), self.activation, self.alpha, 0, 0, 0, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0)
         return output
 
 class Conv2d(nn.Conv2d):

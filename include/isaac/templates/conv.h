@@ -51,7 +51,7 @@ public:
   Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
        param_t pad_h, param_t pad_w, param_t pad_d, param_t stride_h, param_t stride_w, param_t stride_d, param_t upsample_d, param_t upsample_h, param_t upsample_w,
        ActivationType activation,
-       int32_t Zk, int32_t z_crop_m0, int32_t z_crop_m1, int32_t z_crop_p0, int32_t z_crop_p1, int32_t z_crop_q0, int32_t z_crop_q1,
+       param_t Zk, param_t z_crop_m0, param_t z_crop_m1, param_t z_crop_p0, param_t z_crop_p1, param_t z_crop_q0, param_t z_crop_q1,
        param_t vec, param_t bpqn, param_t bk, param_t pqns, param_t ks, param_t crs_l, param_t cs, param_t bc, param_t gridc);
   // Execution
   std::string dump(driver::Device const & device, std::string const & name);
