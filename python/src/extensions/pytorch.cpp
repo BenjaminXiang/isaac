@@ -9,6 +9,7 @@ extern "C"
 inline isaac::ActivationType sc_activation(const std::string & activation){
     if(activation == "relu") return isaac::ReLU;
     if(activation == "linear") return isaac::Linear;
+    if(activation == "sigmoid") return isaac::Sigmoid;
     throw std::runtime_error("Unknown activation function");
 }
 
@@ -41,6 +42,8 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
   if(DIM > 0) S = THCudaTensor_size(state, filters, 1 + (DIM > 2) + (DIM > 1));
   long K = THCudaTensor_size(state, filters, 1 + DIM);
 
+
+
   if(Ci != Cf)
     return 1;
   size_t C = Ci;
@@ -50,9 +53,10 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
   isaac::templates::Conv::output_shapes(D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, M, P, Q);
 
   // Create output
+  size_t Zk = (z)?THCudaTensor_size(state, z, 1):0;
   long output_sizes[5];
   output_sizes[0] = N;
-  output_sizes[1] = K;
+  output_sizes[1] = K + Zk;
   if(DIM > 2) output_sizes[2] = M;
   if(DIM > 1) output_sizes[2 + (DIM > 2)] = P;
   if(DIM > 0) output_sizes[2 + (DIM > 2) + (DIM > 1)] = Q;
@@ -63,20 +67,20 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
   isaac::driver::Buffer I(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, inputs)->data, false);
   isaac::driver::Buffer F(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, filters)->data, false);
   isaac::driver::Buffer O(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, outputs)->data, false);
-  isaac::driver::Buffer Bias(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, bias)->data, false);
   std::unique_ptr<isaac::driver::Buffer> Z;
-  size_t Zk = 0;
-  if(z){
+  if(z)
     Z.reset(new isaac::driver::Buffer(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, z)->data, false));
-    Zk = THCudaTensor_size(state, inputs, 1);
-  }
+  std::unique_ptr<isaac::driver::Buffer> Bias;
+  if(bias)
+    Bias.reset(new isaac::driver::Buffer(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, bias)->data, false));
 
   // Execute convolution
   isaac::CONV(stream.context().device(), stream, dtype, dtype, N, K, M, P, Q, C, T, R, S, D, H, W,
-              pad_d, pad_h, pad_w, stride_d,
-              stride_h, stride_w, upsample_d,
-              upsample_h, upsample_w, I, F, O,
-              &Bias,
+              pad_d, pad_h, pad_w,
+              stride_d, stride_h, stride_w,
+              upsample_d, upsample_h, upsample_w,
+              I, F, O,
+              Bias.get(),
               sc_activation(activation), alpha,
               Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
 

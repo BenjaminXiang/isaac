@@ -1020,6 +1020,18 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  slct.f32.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %leakage, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
     }
   }
+  if(activation_ == Sigmoid){
+    iss << std::endl;
+    iss << " /* Sigmoid */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s){
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, -1.;", i, j, vs[s]) << std::endl;
+      iss << format("  exp.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  add.f32 %rc0_{0}_{1}{2}, 1., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  div.f32 %rc0_{0}_{1}{2}, 1., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+    }
+  }
 
   if(in_dtype_==INT8X4_TYPE){
     iss << "/* Quantize */" << std::endl;
@@ -1212,7 +1224,6 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // Last safe filter element
   int32_t last_safe_b = (depth*K_ - 1 - lastj)/K_ - lastctrs;
   int32_t bound = std::max<int32_t>(1, depth - last_safe_b);
-//  std::cout << u_ << " " << bound << std::endl;
 
   // Constant memory
   driver::Buffer LUT = kernel.module().symbol("_LUT");
@@ -1279,12 +1290,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   kernel.setArg(49, bound);
   if(gridz_>1)
     O.set_zero(stream, N_*(K_ + Zk_)*M_*P_*Q_*dtsize);
-  try{
-    stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
-    stream.synchronize();
-  }catch(...){
-    exit(EXIT_FAILURE);
-  }
+  stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
 }
 
 }

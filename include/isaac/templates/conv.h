@@ -31,7 +31,8 @@ namespace isaac{
 
 enum ActivationType{
   Linear,
-  ReLU
+  ReLU,
+  Sigmoid
 };
 
 
