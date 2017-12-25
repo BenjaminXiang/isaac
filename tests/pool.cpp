@@ -130,13 +130,12 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
 }
 
 template<class DTYPE>
-int do_test(sc::driver::Context const & ctx, size_t N, size_t K, size_t D, size_t H, size_t W, size_t T, size_t R, size_t S, size_t pad_d, size_t pad_h, size_t pad_w, size_t stride_d, size_t stride_h, size_t stride_w){
-  std::cout << "POOLING:" << std::endl;
-  std::cout << "-----------" << std::endl;
-  std::cout << "(" << N << ", " << K << ", " << D << ", " << H << ", " << W << ", " << T << ", " << R << ", " << S << ")..." << std::endl;
+int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t N, size_t K, size_t D, size_t H, size_t W, size_t T, size_t R, size_t S, size_t pad_d, size_t pad_h, size_t pad_w, size_t stride_d, size_t stride_h, size_t stride_w){
+  auto params = {N, K, D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w};
+  std::cout << "(";
+  std::copy(params.begin(), params.end(), std::ostream_iterator<size_t>(std::cout, ", "));
+  std::cout << "\b\b) [" << prefix << "]" << std::endl;
   do_test_impl<DTYPE>(ctx, N, K, D, H, W, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w);
-  std::cout << "-----------" << std::endl;
-  std::cout << std::endl;
   return EXIT_SUCCESS;
 }
 
@@ -145,5 +144,8 @@ int main(){
   std::cout << "===============" << std::endl;
   std::cout << "FLOAT:" << std::endl;
   std::cout << "===============" << std::endl;
-  do_test<float>(ctx, 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 1, 1, 1);
+  std::cout << "POOL: FPROP" << std::endl;
+  std::cout << "-----------" << std::endl;
+  do_test<float>(ctx, "core", 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 1, 1, 1);
+  std::cout << "-----------" << std::endl;
 }
