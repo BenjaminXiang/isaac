@@ -553,6 +553,32 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
   iss << "}" << std::endl;
 
+  if(activation_ == Sigmoid){
+    iss << ".func (.reg .f32 %retval) exp(.param .f32 _x){" << std::endl;
+    iss << "  .reg .f32 %f<15>;" << std::endl;
+    iss << "  .reg .pred %p1, %p2;" << std::endl;
+    iss << "  ld.param.f32 %f3, [_x];" << std::endl;
+    iss << "  mul.f32 	%f4, %f3, 0f3FB8AA3B;" << std::endl;
+    iss << "  cvt.rzi.f32.f32	%f5, %f4;" << std::endl;
+    iss << "  mov.f32 	%f6, 0fBF317200;" << std::endl;
+    iss << "  fma.rn.f32 	%f7, %f5, %f6, %f3;" << std::endl;
+    iss << "  mov.f32 	%f8, 0fB5BFBE8E;" << std::endl;
+    iss << "  fma.rn.f32 	%f9, %f5, %f8, %f7;" << std::endl;
+    iss << "  mul.f32 	%f2, %f9, 0f3FB8AA3B;" << std::endl;
+    iss << "  // inline asm" << std::endl;
+    iss << "  ex2.approx.ftz.f32 %f1,%f2;" << std::endl;
+    iss << "  // inline asm" << std::endl;
+    iss << "  add.f32 	%f10, %f5, 0f00000000;" << std::endl;
+    iss << "  ex2.approx.f32 	%f11, %f10;" << std::endl;
+    iss << "  mul.f32 	%f12, %f1, %f11;" << std::endl;
+    iss << "  setp.lt.f32	%p1, %f3, 0fC2D20000;" << std::endl;
+    iss << "  selp.f32	%f13, 0f00000000, %f12, %p1;" << std::endl;
+    iss << "  setp.gt.f32	%p2, %f3, 0f42D20000;" << std::endl;
+    iss << "  selp.f32	%retval, 0f7F800000, %f13, %p2;" << std::endl;
+    iss << "  ret;" << std::endl;
+    iss << "}" << std::endl;
+  }
+
 
   iss << ".entry " << name << "(" << std::endl
       << "            .param .b64 _pi, .param .b64 _pf, .param .b64 _po," << std::endl
@@ -1023,15 +1049,21 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   if(activation_ == Sigmoid){
     iss << std::endl;
     iss << " /* Sigmoid */" << std::endl;
+    iss << "  .reg .f32 %res, %arg;" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
     for(size_t s = 0; s < vec_; ++s){
-      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, -1.;", i, j, vs[s]) << std::endl;
-      iss << format("  exp.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-      iss << format("  add.f32 %rc0_{0}_{1}{2}, 1., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-      iss << format("  div.f32 %rc0_{0}_{1}{2}, 1., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  mul.f32 %arg, %rc0_{0}_{1}{2}, -1.;", i, j, vs[s]) << std::endl;
+      iss << format("  call (%res), exp, (%arg);", i, j, vs[s]) << std::endl;
+      iss << format("  add.f32 %rc0_{0}_{1}{2}, 1., %res;", i, j, vs[s]) << std::endl;
+      iss << format("  div.approx.f32 %rc0_{0}_{1}{2}, 1., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
     }
   }
+
+//  if(activation_ == Sigmoid){
+//  std::cout << iss.str() << std::endl;
+//  exit(EXIT_FAILURE);
+//  }
 
   if(in_dtype_==INT8X4_TYPE){
     iss << "/* Quantize */" << std::endl;

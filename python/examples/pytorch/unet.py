@@ -50,14 +50,20 @@ class UNet3D(nn.Module):
             return isaac.pytorch.Conv3dCropCat(in_num, out_num, (1,1,1), upsample=strides, activation = 'linear', bias = True)
         else:
             return UpConvCropCat((1,2,2), in_num, out_num)
-            
+
+    def MaxPool(self, kernel_size, stride, with_isaac):
+        if with_isaac:
+            return isaac.pytorch.MaxPool3d(kernel_size, stride)
+        else:
+            return nn.MaxPool3d(kernel_size, stride)
+
     def __init__(self, in_num=1, out_num=3, filters=[24,72,216,648],relu_slope=0.005):
         super(UNet3D, self).__init__()
         if len(filters) != 4: 
             raise AssertionError 
         filters = [in_num] + filters
         self.depth = len(filters) - 1
-        with_isaac = False
+        with_isaac = True
         
         # Downward convolutions
         self.down_conv = nn.ModuleList([nn.Sequential(
@@ -65,7 +71,7 @@ class UNet3D(nn.Module):
                 self.ConvBiasActivation(filters[x+1], filters[x+1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac))
                    for x in range(0, self.depth)])
         # Pooling
-        self.pool = nn.ModuleList([nn.MaxPool3d((1,2,2), (1,2,2))
+        self.pool = nn.ModuleList([self.MaxPool((1,2,2), (1,2,2), with_isaac = with_isaac)
                    for x in range(self.depth)])
         
         # Upsampling
@@ -78,7 +84,7 @@ class UNet3D(nn.Module):
                    for x in range(self.depth, 1, -1)])
                    
         # Final layer
-        self.final = self.ConvBiasActivation(filters[1], out_num, kernel_size=1, function = 'sigmoid', alpha = 0, with_isaac = False)
+        self.final = self.ConvBiasActivation(filters[1], out_num, kernel_size=1, function = 'sigmoid', alpha = 0, with_isaac = with_isaac)
     
     def forward(self, x):
         z = [None]*self.depth

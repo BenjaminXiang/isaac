@@ -14,11 +14,11 @@ class ConvNdFunction(Function):
         self.strides = strides
         self.upsample = upsample
         self.crop = crop
+        self.ffi = cffi.FFI()
 
     def forward(self, input, weight, bias, z):
-        ffi = cffi.FFI()
-        z = z if z.size() else ffi.NULL
-        bias = bias if bias.size() else ffi.NULL
+        z = z if z.size() else self.ffi.NULL
+        bias = bias if bias.size() else self.ffi.NULL
         output = input.new()
         isaac_conv_nd(input, weight, output,
                       self.upsample[0], self.upsample[1], self.upsample[2], # Upsample
@@ -29,6 +29,25 @@ class ConvNdFunction(Function):
                       z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5], # Crop-cat
                       )
         return output
+
+class MaxPoolNdFunction(Function):
+    def __init__(self, kernel_size, pad = (0, 0, 0), strides = (1, 1, 1)):
+        self.kernel_size = kernel_size
+        self.pad = pad
+        self.strides = strides
+        self.ffi = cffi.FFI()
+
+    def forward(self, input):
+        output = input.new()
+        isaac_max_pool_nd(input, output,
+                      self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
+                      self.pad[0], self.pad[1], self.pad[2],
+                      self.strides[0], self.strides[1], self.strides[2])
+        return output
+
+#############################
+###      Convolutions     ###
+#############################
 
 # 2D Conv
 class Conv2d(nn.Conv2d):
@@ -64,3 +83,16 @@ class Conv3dCropCat(Conv3d):
         bias = self.bias if self.bias is not None else torch.autograd.Variable()
         crop = (offset[0], offset[0], offset[1], offset[1], offset[2], offset[2])
         return ConvNdFunction(self.activation, self.alpha, upsample=self.upsample)(x, self.weight, bias, z)
+
+#############################
+###      Pooling          ###
+#############################
+
+# 3D Pool
+class MaxPool3d(nn.MaxPool3d):
+    def __init__(self, kernel_size, stride=None, padding=0, dilation=1,
+                 return_indices=False, ceil_mode=False):
+        super(MaxPool3d, self).__init__(kernel_size, stride, padding, dilation, return_indices, ceil_mode)
+
+    def forward(self, x):
+        return MaxPoolNdFunction(self.kernel_size, strides=self.stride)(x)
