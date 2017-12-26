@@ -5,7 +5,8 @@ from torch.autograd import Variable
 import numpy as np
 import copy
 import isaac.pytorch
-
+from time import time
+import timeit
 
 def ConvBiasActivation(in_num, out_num, kernel_size, function, alpha):
     conv = nn.Conv3d(in_num, out_num, kernel_size=kernel_size, padding=0, stride=1, bias=True)
@@ -25,7 +26,7 @@ class UpConvCropCat(nn.Module):
         torch.manual_seed(0)
         self.conv_bias_relu = ConvBiasActivation(in_num, out_num, (1, 1, 1), function = 'linear', alpha = 1)
 
-        
+
     def forward(self, x, z):
         x = self.upsample(x)
         x = self.conv_bias_relu(x)
@@ -36,7 +37,7 @@ class UpConvCropCat(nn.Module):
 
 
 class UNet3D(nn.Module):
-    
+
     def ConvBiasActivation(self, in_num, out_num, kernel_size, function, alpha, with_isaac):
         if with_isaac:
             return isaac.pytorch.Conv3d(in_num, out_num, kernel_size, activation=function, alpha=alpha)
@@ -58,12 +59,12 @@ class UNet3D(nn.Module):
 
     def __init__(self, in_num=1, out_num=3, filters=[24,72,216,648],relu_slope=0.005,with_isaac=False):
         super(UNet3D, self).__init__()
-        if len(filters) != 4: 
-            raise AssertionError 
+        if len(filters) != 4:
+            raise AssertionError
         filters = [in_num] + filters
         self.depth = len(filters) - 1
         self.with_isaac = with_isaac
-        
+
         # Downward convolutions
         self.down_conv = nn.ModuleList([nn.Sequential(
                 self.ConvBiasActivation(filters[x  ], filters[x+1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac),
@@ -72,19 +73,19 @@ class UNet3D(nn.Module):
         # Pooling
         self.pool = nn.ModuleList([self.MaxPool((1,2,2), (1,2,2), with_isaac = with_isaac)
                    for x in range(self.depth)])
-        
+
         # Upsampling
         self.upsample = nn.ModuleList([self.UpConvCropCat((1,2,2), filters[x], filters[x-1], with_isaac = with_isaac) for x in range(self.depth, 1, -1)])
-                   
+
         # Upward convolution
         self.up_conv = nn.ModuleList([nn.Sequential(
                 self.ConvBiasActivation(2*filters[x-1], filters[x-1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac),
                 self.ConvBiasActivation(  filters[x-1], filters[x-1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac))
                    for x in range(self.depth, 1, -1)])
-                   
+
         # Final layer
         self.final = self.ConvBiasActivation(filters[1], out_num, kernel_size=1, function = 'sigmoid', alpha = 0, with_isaac = with_isaac)
-    
+
     def forward(self, x):
         z = [None]*self.depth
         for i in range(self.depth):
@@ -94,15 +95,30 @@ class UNet3D(nn.Module):
             x = self.upsample[i](x, z[self.depth - 2 - i])
             x = self.up_conv[i](x)
         x = self.final(x)
+        torch.cuda.synchronize()
         return x
 
 
 if __name__ == '__main__':
     X = Variable(torch.Tensor(1, 1, 31, 204, 204).uniform_(0, 1)).cuda()
+
+    # Build models
     torch.manual_seed(0)
-    Y1 = UNet3D(with_isaac=False).cuda()(X)
+    unet_ref = UNet3D(with_isaac=False).cuda()
     torch.manual_seed(0)
-    Y2 = UNet3D(with_isaac=True).cuda()(X)
-    error = torch.norm(Y1 - Y2)/torch.norm(Y1)
+    unet_sc = UNet3D(with_isaac=True).cuda()
+
+    # Test correctness
+    y_ref = unet_ref(X)
+    y_sc = unet_sc(X)
+    error = torch.norm(y_ref - y_sc)/torch.norm(y_ref)
     print('Error: {}'.format(error.data[0]))
-    
+
+    # Benchmark
+    t_sc = [int(x*1e3) for x in timeit.repeat(lambda: unet_sc(X), repeat=1, number=1)]
+    t_ref = [int(x*1e3) for x in timeit.repeat(lambda: unet_ref(X), repeat=1, number=1)]
+    print('Time: {}ms (Isaac) ; {}ms (PyTorch)'.format(t_sc[0], t_ref[0]))
+
+
+
+

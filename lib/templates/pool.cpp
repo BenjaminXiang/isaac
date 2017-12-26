@@ -480,12 +480,7 @@ void Pool::enqueue(driver::Kernel& kernel, driver::Stream& stream, driver::Buffe
 
     int32_t cl0 = bc0_*cs0_;
     size_t grid0 = ceil(Npix, cl0);
-//    try{
-      stream.enqueue(kernel, {grid0, 1, 1}, {bc0_, 1, 1});
-      stream.synchronize();
-//    }catch(...){
-//      exit(EXIT_FAILURE);
-//    }
+    stream.enqueue(kernel, {grid0, 1, 1}, {bc0_, 1, 1});
 }
 
 
