@@ -597,14 +597,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _Zk, .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b32 _strideZn, .param .b32 _strideZk, .param .b32 _strideZm, .param .b32 _strideZp, .param .b32 _strideZq, .param .b64 _pz," << std::endl
       << "            .param .b32 _bound)" << std::endl;
   iss << "{" << std::endl;
+
   // Predicates
   iss << "  .reg.pred %in_bounds, %predcrs, %predloop, %predz, %predlut;" << std::endl;
   iss << format("  .reg .pred %predk<{}>;", cs1_) << std::endl;
   iss << format("  .reg .pred %pred<{}>;", vec_) << std::endl;
-  iss << format("  .reg .b32 %maskcrs;", vec_) << std::endl;
-  for(size_t j = 0; j < cs1_ ; j++)
-  for(size_t i = 0 ; i < cs0_ ; i++)
-    iss << format("  .reg .pred %predc{}_{};", i, j) << std::endl;
 
   for(size_t i = 0; i < cl0; i += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++){
@@ -612,6 +609,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  .reg .b32 %mask{};", i + s) << std::endl;
   }
   iss << format("  .reg .b32 %bound;") << std::endl;
+
   // Split-K
   iss << "  .reg .b32 %div, %rem, %offc;" << std::endl;
   // Special registers
@@ -619,20 +617,19 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  .reg .b32 %id, %id1pqn, %idz, %id0, %id1;" << std::endl;
   iss << "  .reg .b32 %afid0, %bfid1, %idctrs;" << std::endl;
   // Look-up table
-  iss << "  .reg .b32 %ctrs, %trs, %t, %c, %tr, %r, %s;" << std::endl;
-  iss << "  .reg .b32 %nextctrs, %nexttrs, %nextt, %nextc, %nexttr, %nextr, %nexts;" << std::endl;
-  iss << "  .reg .b32 %cdiff, %tdiff, %rdiff, %sdiff;" << std::endl;
-  iss << "  .reg .b32 %maskf, %masks, %p_delta, %writelut, %readlut, %inc_delta, %p_inc_delta, %inc_mask, %p_inc_mask;" << std::endl;
+  iss << "  .reg .b32 %trs, %t, %c, %tr, %r, %s;" << std::endl;
+  iss << "  .reg .b32 %maskf, %masks, %inc_delta, %p_inc_delta, %inc_mask, %p_inc_mask;" << std::endl;
   for(size_t i = 0; i < cl0; i += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++){
       iss << format("  .reg .b32 %maski{0}, %p_mask{0};", i + s) << std::endl;
       iss << format("  .reg .b32 %p_delta{0}, %inc_i{0};", i + s) << std::endl;
-      iss << format("  .reg .b32 %t{0}, %r{0}, %s{0};", i + s) << std::endl;
   }
+
   // Tensor shapes
   iss << "  .reg .b32 %pad_d, %pad_h, %pad_w, %stride_d, %stride_h, %stride_w, %upsample_d, %upsample_h, %upsample_w;" << std::endl;
-  iss << "  .reg .b32 %Npix, %K, %C, %Nfilt, %CTRS;" << std::endl;
+  iss << "  .reg .b32 %Npix, %Nfilt, %K, %C, %CTRS;" << std::endl;
   iss << "  .reg .b32 %D, %H, %W, %M, %P, %Q, %N, %MPQ, %Zk, %mN, %mP, %mM, %mQ, %mMPQ;" << std::endl;
+
   // Strides
   iss << format("  .reg .b32 %strideIc, %strideId, %strideIh, %strideIw, %strideIn;") << std::endl;
   iss << format("  .reg .b32 %strideFc, %strideFs, %strideFk;") << std::endl;
@@ -641,7 +638,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   // Pointers
   iss << format("  .reg .b64 %pi, %pf, %pc, %pz;") << std::endl;
-  iss << format("  .reg .b32 %offi, %inc_i, %offF, %incf;") << std::endl;
+  iss << format("  .reg .b32 %offi, %offF, %incf;") << std::endl;
   for(size_t i = 0; i < cl0; i += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++)
      iss << format("  .reg .b32 %offi{};", i + s) << std::endl;
@@ -656,12 +653,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  .reg .b32 %diffz{0};", i) << std::endl;
   for(size_t j = 0; j < cs1_; j++)
     iss << format("  .reg .b64 %pc{0}, %pz{0};", j) << std::endl;
-  // Scale
-  iss << "  .reg .b32 %output_rescale, %output_scale, %input_scale;" << std::endl;
-  // Bias
-  iss << "  .reg .b64 %bias;" << std::endl;
-  for(size_t j = 0; j < cs1_; j++)
-    iss << format("  .reg.b64 %pbias{};", j) << std::endl;
   // Pointer offsets
   iss << format("  .reg .b32 %offIndhw;") << std::endl;
   iss << format("  .reg .b32 %Dmpad, %Hmpad, %Wmpad;") << std::endl;
@@ -673,10 +664,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  .reg.u32 %offId{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offIh{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offIw{};", i + s) << std::endl;
+    iss << format("  .reg.u32 %offIn{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offDeltad{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offDeltah{};", i + s) << std::endl;
     iss << format("  .reg.u32 %offDeltaw{};", i + s) << std::endl;
-    iss << format("  .reg.u32 %offIn{};", i + s) << std::endl;
     iss << format("  .reg.u32 %dlo{0}, %hlo{0}, %wlo{0};", i + s) << std::endl;
     iss << format("  .reg.u32 %dhi{0}, %hhi{0}, %whi{0};", i + s) << std::endl;
     iss << format("  .reg.u32 %maskd{0}, %maskh{0}, %maskw{0};", i + s) << std::endl;
@@ -695,15 +686,15 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << format("  .reg.b32 %offc1_<{}>;", cs1_) << std::endl;
   // Bounds checking
-  iss << format("  .reg.s32 %Npixm<{0}>, %Km<{0}>;", vec_) << std::endl;
+  iss << format("  .reg.s32 %Km<{0}>;", vec_) << std::endl;
   // LDG registers
   iss << format("  .reg .b32 %writei, %readi;") << std::endl;
-  iss << format("  .reg .b32 %writef, %readf;") << std::endl;
   for(size_t pqn = 0; pqn < cl0; pqn+=vec_*bf_pqn)
     iss << format("  .reg {}.{} %rri{};", vv, io_dtype, pqn) << std::endl;
+  iss << format("  .reg .b32 %writef, %readf;") << std::endl;
   for(size_t k = 0; k < cl1; k+=vec_*bf_k)
     iss << format("  .reg {}.{} %rrf{};", vv, io_dtype, k) << std::endl;
-  // Tile registers
+  // Tiles
   iss << "  // For O tile" << std::endl;
   declare_register_tile('c', cs0_, cs1_, 1);
   iss << "  // For I tile" << std::endl;
@@ -711,8 +702,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  // For F tile" << std::endl;
   declare_register_tile('f', cs1_, us_, 1);
   // Bias
+  iss << format("  .reg .b64 %bias, %pbias<{}>;", cs1_) << std::endl;
   iss << format("  .reg .{} %rbias<{}>;", io_dtype, cs1_) << std::endl;
   iss << format("  .reg .pred %has_bias;") << std::endl;
+  // Quantization
+  iss << "  .reg .b32 %output_rescale;" << std::endl;
 
   iss << std::endl;
   iss << "  /* Initialize O */" << std::endl;
@@ -991,7 +985,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-  if(in_dtype_==INT8X4_TYPE){
+  if(out_dtype_==INT8X4_TYPE){
     iss << "/* Convert to FP32 */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
@@ -1060,12 +1054,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-//  if(activation_ == Sigmoid){
-//  std::cout << iss.str() << std::endl;
-//  exit(EXIT_FAILURE);
-//  }
-
-  if(in_dtype_==INT8X4_TYPE){
+  if(out_dtype_==INT8X4_TYPE){
     iss << "/* Quantize */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
