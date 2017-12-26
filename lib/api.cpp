@@ -51,6 +51,7 @@ void GEMM(driver::Device const & device, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
+    generator = inference.get(key_type(stream, dtype, AT, BT, {M, N, K, offa, lda, offb, ldb, offc, ldc})).get();
   generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream, alpha, A, B, beta, C);
 
 }

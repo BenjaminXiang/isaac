@@ -147,5 +147,9 @@ int main(){
   std::cout << "POOL: FPROP" << std::endl;
   std::cout << "-----------" << std::endl;
   do_test<float>(ctx, "core", 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 1, 1, 1);
+//  do_test<float>(ctx, "pad", 5, 41, 31, 7, 13, 3, 3, 3, 5, 1, 2, 1, 1, 1);
+  do_test<float>(ctx, "stride", 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 6, 3, 4);
+//  do_test<float>(ctx, "pad + stride", 5, 41, 31, 7, 13, 3, 3, 3, 5, 1, 2, 6, 3, 4);
+
   std::cout << "-----------" << std::endl;
 }

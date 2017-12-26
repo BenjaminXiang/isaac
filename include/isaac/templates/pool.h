@@ -32,6 +32,9 @@ namespace isaac{
 namespace templates{
 
 class Pool: public Generator{
+private:
+  void init_constant_memory(std::vector<int32_t>& delta, std::vector<uint32_t> &masks, size_t nlut, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId);
+
 public:
   static const std::string id;
   static const size_t Nshapes;
@@ -72,6 +75,9 @@ private:
   param_t bc0_;
   param_t cs0_;
   param_t u_;
+  // Constant buffer
+  std::vector<int32_t> cLUT;
+  std::vector<uint32_t> masks_;
 };
 
 }

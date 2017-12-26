@@ -6,10 +6,6 @@ import numpy as np
 import copy
 import isaac.pytorch
 
-def mergeCrop(x1, x2):
-    offset = [(x1.size()[x]-x2.size()[x])//2 for x in range(2,x1.dim())] 
-    return torch.cat([x2, x1[:,:,offset[0]:offset[0]+x2.size(2),
-                     offset[1]:offset[1]+x2.size(3),offset[2]:offset[2]+x2.size(4)]], 1)
 
 def ConvBiasActivation(in_num, out_num, kernel_size, function, alpha):
     conv = nn.Conv3d(in_num, out_num, kernel_size=kernel_size, padding=0, stride=1, bias=True)
@@ -28,6 +24,7 @@ class UpConvCropCat(nn.Module):
         self.upsample.weight.data.fill_(1.0)
         torch.manual_seed(0)
         self.conv_bias_relu = ConvBiasActivation(in_num, out_num, (1, 1, 1), function = 'linear', alpha = 1)
+
         
     def forward(self, x, z):
         x = self.upsample(x)
@@ -73,11 +70,11 @@ class UNet3D(nn.Module):
                 self.ConvBiasActivation(filters[x+1], filters[x+1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac))
                    for x in range(0, self.depth)])
         # Pooling
-        self.pool = nn.ModuleList([self.MaxPool((1,2,2), (1,2,2), with_isaac = False)
+        self.pool = nn.ModuleList([self.MaxPool((1,2,2), (1,2,2), with_isaac = with_isaac)
                    for x in range(self.depth)])
         
         # Upsampling
-        self.upsample = nn.ModuleList([self.UpConvCropCat((1,2,2), filters[x], filters[x-1], with_isaac = False) for x in range(self.depth, 1, -1)])
+        self.upsample = nn.ModuleList([self.UpConvCropCat((1,2,2), filters[x], filters[x-1], with_isaac = with_isaac) for x in range(self.depth, 1, -1)])
                    
         # Upward convolution
         self.up_conv = nn.ModuleList([nn.Sequential(
@@ -108,5 +105,4 @@ if __name__ == '__main__':
     Y2 = UNet3D(with_isaac=True).cuda()(X)
     error = torch.norm(Y1 - Y2)/torch.norm(Y1)
     print('Error: {}'.format(error.data[0]))
-
     

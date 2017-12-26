@@ -50,8 +50,81 @@ const size_t Pool::Nparams = Nshapes + Ntune;
 
 Pool::Pool(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
            param_t vec, param_t bc0, param_t cs0, param_t):
-    dtype_(dtype), C_(C), D_(D), H_(H), W_(W), N_(N), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S), pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w), stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
-    vec_(vec), bc0_(bc0), cs0_(cs0), u_(1){
+    dtype_(dtype), C_(C), D_(D), H_(H), W_(W), N_(N), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
+    pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
+    stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
+    vec_(vec), bc0_(bc0), cs0_(cs0), u_(1)
+{
+
+  size_t Nfilt = T_*R_*S_;
+  size_t nlut = Nfilt;
+
+  // Data-type size
+  int32_t dtsize = size_of(dtype);
+
+  // I strides
+  int32_t strideIw = dtsize;
+  int32_t strideIh = W_*strideIw;
+  int32_t strideId = H_*strideIh;
+  int32_t strideIc = D_*strideId;
+
+  // Init constant memory
+  cLUT.resize(nlut);
+  masks_.resize(nlut + (2*pad_h+1)*(2*pad_w+1)*(2*pad_d+1)*nlut);
+  init_constant_memory(cLUT, masks_, nlut, strideIc, strideIw, strideIh, strideId);
+
+}
+
+
+// Constant memory
+void Pool::init_constant_memory(std::vector<int32_t> &delta, std::vector<uint32_t> &masks, size_t nlut, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId){
+   size_t block = u_;
+   size_t Nfilt = T_*R_*S_;
+
+   auto unpack = [&](int32_t trs){
+       int32_t tr = trs / S_;
+       int32_t s = trs - tr*S_;
+       int32_t t = tr / R_;
+       int32_t r = tr - t*R_;
+       return std::make_tuple(t, r, s);
+   };
+
+   /* Deltas */
+   for(size_t i = 0; i < nlut; ++i){
+       int32_t t, r, s, nextt, nextr, nexts;
+       std::tie(t, r, s) = unpack(i);
+       std::tie(nextt, nextr, nexts) = unpack(i + block);
+       int32_t tdiff = nextt - t;
+       int32_t rdiff = nextr - r;
+       int32_t sdiff = nexts - s;
+       delta[i] = sdiff*strideIw + rdiff*strideIh + tdiff*strideId;
+   }
+
+   /* Masks */
+   size_t Ms0 = nlut;
+   size_t Ms1 = 2*pad_w_ + 1;
+   size_t Ms2 = 2*pad_h_ + 1;
+   size_t Ms3 = 2*pad_d_ + 1;
+
+   for(size_t pd = 0; pd < Ms3; ++pd)
+   for(size_t ph = 0; ph < Ms2; ++ph)
+   for(size_t pw = 0; pw < Ms1; ++pw){
+     uint32_t* masks_ptr = &masks[nlut + pw*Ms0 + ph*Ms0*Ms1 + pd*Ms0*Ms1*Ms2];
+     for(size_t i = 0; i < Ms0; ++i){
+        int32_t t, r, s;
+        uint32_t mask = 0x0;
+        for(size_t j = 0; j < block; ++j){
+          std::tie(t, r, s) = unpack((i + j) % Nfilt);
+          bool in_bounds_d = (t + pd) >= pad_d_ && (t + pd) < (T_ + pad_d_);
+          bool in_bounds_h = (r + ph) >= pad_h_ && (r + ph) < (R_ + pad_h_);
+          bool in_bounds_w = (s + pw) >= pad_w_ && (s + pw) < (S_ + pad_w_);
+          mask |= (in_bounds_d && in_bounds_h && in_bounds_w) << j;
+        }
+        masks_ptr[i] = mask;
+     }
+   }
+   for(size_t i = 0; i < nlut; ++i)
+     masks[i] = 0x0;
 }
 
 // Validity
@@ -65,8 +138,7 @@ void Pool::check_valid(driver::Device const & device, size_t M, param_t* params,
     param_t Nfilt = x[2];
     param_t vec = x[3], bc0 = x[4], cs0 = x[5];
     //Test
-    bool is_valid =  (4*Nfilt <= device.max_shared_memory())
-                  && (bc0 <= device.max_block_dim()[0])
+    bool is_valid =  (bc0 <= device.max_block_dim()[0])
                   && (bc0 <= device.max_threads_per_block())
                   && (vec*size_of(dtype) <= 16)
                   && (cs0 % vec == 0);
@@ -79,56 +151,15 @@ void Pool::check_valid(driver::Device const & device, size_t M, param_t* params,
 std::string Pool::dump(driver::Device const &, std::string const & name){
     std::stringstream iss;
     size_t cl0 = cs0_*bc0_;
-    size_t block = u_;
-    size_t nlut = T_*R_*S_;
-    size_t nthreads = bc0_;
-    size_t addr_lut = 0;
-    std::string compute_dtype = arith_str(dtype_);
+    size_t Nfilt = T_*R_*S_;
+    size_t nlut = Nfilt;
     std::string io_dtype = io_str(dtype_);
     size_t dtsize = size_of(dtype_);
-    size_t size_shmem = nlut*4;
 
     std::string vv = vec_>1?format(".v{}", vec_):"";
     const char* vs[] = {".x", ".y", ".z", ".w"};
     if(vec_==1)
       vs[0] = "";
-
-    auto lut = [&](){
-      iss << "  mov.s32 %trs, %id;" << std::endl;
-      iss << format("  setp.lt.u32 %in_bounds, %trs, {};", nlut) << std::endl;
-      iss << "  @!%in_bounds bra END_LUT_LOOP;" << std::endl;
-      iss << "LUT_LOOP:" << std::endl;
-      iss << format("  div.s32 %tr, %trs, {};", S_) << std::endl;
-      iss << format("  rem.s32 %s, %trs, {};", S_) << std::endl;
-      iss << format("  div.s32 %t, %tr, {};", R_) << std::endl;
-      iss << format("  rem.s32 %r, %tr, {};", R_) << std::endl;
-
-      iss << format("  add.s32 %nexttrs, %trs, {};", block) << std::endl;
-      iss << format("  div.s32 %nexttr, %nexttrs, {};", S_) << std::endl;
-      iss << format("  rem.s32 %nexts, %nexttrs, {};", S_) << std::endl;
-      iss << format("  div.s32 %nextt, %nexttr, {};", R_) << std::endl;
-      iss << format("  rem.s32 %nextr, %nexttr, {};", R_) << std::endl;
-
-      iss << format("  sub.s32 %tdiff, %nextt, %t;") << std::endl;
-      iss << format("  sub.s32 %rdiff, %nextr, %r;") << std::endl;
-      iss << format("  sub.s32 %sdiff, %nexts, %s;") << std::endl;
-
-      iss << format("  mul.lo.s32 %inci, %tdiff, %strideId;") << std::endl;
-      iss << format("  mad.lo.s32 %inci, %rdiff, %strideIh, %inci;") << std::endl;
-      iss << format("  mad.lo.s32 %inci, %sdiff, %strideIw, %inci;") << std::endl;
-
-      iss << "  // Store" << std::endl;
-      iss << format("  mad.lo.u32 %writelut, %trs, {}, %shared;", 4) << std::endl;
-      iss << format("  st.shared.u32 [%writelut + {}], %inci;", addr_lut) << std::endl;
-
-      iss << "  // Continue loop if necessary" << std::endl;
-      iss << format("  add.u32 %trs, %trs, {};", nthreads) << std::endl;
-      iss << format("  setp.lt.u32 %in_bounds, %trs, {};", nlut) << std::endl;
-      iss << "  @%in_bounds bra LUT_LOOP;" << std::endl;
-      iss << std::endl;
-      iss << "END_LUT_LOOP:" << std::endl;
-      iss << "  bar.sync 0;" << std::endl;
-    };
 
     auto ptr_ldg_i = [&](){
         iss << format("  // I offsets") << std::endl;
@@ -152,22 +183,77 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
           iss << format("  mad.lo.s32 %offIc{0}, %mC, %offIn{0}, %offInc{0};", i + s) << std::endl;
         }
 
+        for(size_t i = 0; i < cl0; i+=vec_*bc0_)
+        for(size_t s = 0; s < vec_; s++)
+          iss << format("   setp.lt.u32 %predi{0}, %offIncdhw{0}, %Npix;", i + s) << std::endl;
 
-        for(size_t i = 0; i < cl0; i += vec_*bc0_)
+        for(size_t i = 0; i < cl0; i+=vec_*bc0_)
         for(size_t s = 0; s < vec_; s++){
-          iss << format("  mad.wide.u32 %pi{0}, %offIn{0}, %strideIn, %pi;", i + s) << std::endl;
-          iss << format("  mad.wide.u32 %pi{0}, %offIc{0}, %strideIc, %pi{0};", i + s) << std::endl;
-          iss << format("  mad.wide.u32 %pi{0}, %offId{0}, %strideId, %pi{0};", i + s) << std::endl;
-          iss << format("  mad.wide.u32 %pi{0}, %offIh{0}, %strideIh, %pi{0};", i + s) << std::endl;
-          iss << format("  mad.wide.u32 %pi{0}, %offIw{0}, %strideIw, %pi{0};", i + s) << std::endl;
+            iss << format("  mul.lo.s32 %offId{0}, %offId{0}, %stride_d;", i + s) << std::endl;
+            iss << format("  mul.lo.s32 %offIh{0}, %offIh{0}, %stride_h;", i + s) << std::endl;
+            iss << format("  mul.lo.s32 %offIw{0}, %offIw{0}, %stride_w;", i + s) << std::endl;
+            iss << format("  sub.s32 %offId{0}, %offId{0}, %pad_d;", i + s) << std::endl;
+            iss << format("  sub.s32 %offIh{0}, %offIh{0}, %pad_h;", i + s) << std::endl;
+            iss << format("  sub.s32 %offIw{0}, %offIw{0}, %pad_w;", i + s) << std::endl;
+        }
+
+        iss << format("  sub .s32 %Dmpad, {}, %D;", T_) << std::endl;
+        iss << format("  sub .s32 %Hmpad, {}, %H;", R_) << std::endl;
+        iss << format("  sub .s32 %Wmpad, {}, %W;", S_) << std::endl;
+        for(size_t i = 0; i < cl0; i+=vec_*bc0_)
+        for(size_t s = 0; s < vec_; s++){
+            iss << format("  min.s32 %dlo{0}, %offId{0}, 0;", i + s) << std::endl;
+            iss << format("  min.s32 %hlo{0}, %offIh{0}, 0;", i + s) << std::endl;
+            iss << format("  min.s32 %wlo{0}, %offIw{0}, 0;", i + s) << std::endl;
+            iss << format("  add.s32 %dhi{0}, %offId{0}, %Dmpad;", i + s) << std::endl;
+            iss << format("  add.s32 %hhi{0}, %offIh{0}, %Hmpad;", i + s) << std::endl;
+            iss << format("  add.s32 %whi{0}, %offIw{0}, %Wmpad;", i + s) << std::endl;
+            iss << format("  max.s32 %dhi{0}, %dhi{0}, 0;", i + s) << std::endl;
+            iss << format("  max.s32 %hhi{0}, %hhi{0}, 0;", i + s) << std::endl;
+            iss << format("  max.s32 %whi{0}, %whi{0}, 0;", i + s) << std::endl;
+
+
+            iss << format("  add.s32 %maskd{0}, %pad_d, %dlo{0};", i + s) << std::endl;
+            iss << format("  add.s32 %maskd{0}, %maskd{0}, %dhi{0};", i + s) << std::endl;
+            iss << format("  add.s32 %maskh{0}, %pad_h, %hlo{0};", i + s) << std::endl;
+            iss << format("  add.s32 %maskh{0}, %maskh{0}, %hhi{0};", i + s) << std::endl;
+            iss << format("  add.s32 %maskw{0}, %pad_w, %wlo{0};", i + s) << std::endl;
+            iss << format("  add.s32 %maskw{0}, %maskw{0}, %whi{0};", i + s) << std::endl;
+
+
+            iss << "  mov.b32 %masks, _masks;" << std::endl;
+            iss << format("  @!%predi{0} mov.s32 %p_mask{0}, %masks;", i + s) << std::endl;
+            iss << format("  @%predi{0} add.s32 %p_mask{0}, {1}, %masks;", i + s, 4*nlut) << std::endl;
+            iss << format("  @%predi{0} mad.lo.s32 %p_mask{0}, %maskd{0}, {1}, %p_mask{0};", i + s, 4*nlut*(2*pad_w_ + 1)*(2*pad_h_ + 1)) << std::endl;
+            iss << format("  @%predi{0} mad.lo.s32 %p_mask{0}, %maskh{0}, {1}, %p_mask{0};", i + s, 4*nlut*(2*pad_w_ + 1)) << std::endl;
+            iss << format("  @%predi{0} mad.lo.s32 %p_mask{0}, %maskw{0}, {1}, %p_mask{0};", i + s, 4*nlut) << std::endl;
+        }
+
+
+        iss << format("  // I deltas pointers") << std::endl;
+        iss << "  mov.b32 %p_delta, _LUT;" << std::endl;
+
+        iss << format("  // I pointers") << std::endl;
+        for(size_t pqn = 0; pqn < cl0; pqn += vec_*bc0_)
+        for(size_t s = 0; s < vec_; s++){
+          iss << format("  mad.lo.s32 %offi{0}, %offId{0}, %strideId, 0;", pqn + s) << std::endl;
+          iss << format("  mad.lo.s32 %offi{0}, %offIh{0}, %strideIh, %offi{0};", pqn + s) << std::endl;
+          iss << format("  mad.lo.s32 %offi{0}, %offIw{0}, %strideIw, %offi{0};", pqn + s) << std::endl;
+          iss << format("  mad.lo.s32 %offi{0}, %offIc{0}, %strideIc, %offi{0};", pqn + s) << std::endl;
+          iss << format("  mad.lo.s32 %offi{0}, %offIn{0}, %strideIn, %offi{0};", pqn + s) << std::endl;
+          iss << format("  mad.wide.s32 %pi{0}, %offi{0}, 1, %pi;", pqn + s) << std::endl;
         }
     };
 
+
+    iss << ".const .b32 _masks[" << masks_.size() << "];" << std::endl;
+    iss << ".const .b32 _LUT[" << cLUT.size() << "];" << std::endl;
 
     iss << ".entry " << name << "(" << std::endl
         << "            .param .b64 _pi, .param .b64 _pc," << std::endl
         << "            .param .b32 _Npix, .param .b32 _Nfilt," << std::endl
         << "            .param .b32 _M, .param .b32 _P, .param .b32 _Q, .param .b32 _C," << std::endl
+        << "            .param .b32 _D, .param .b32 _H, .param .b32 _W," << std::endl
         << "            .param .b32 _stride_d, .param .b32 _stride_h, .param .b32 _stride_w, .param .b32 _pad_d, .param .b32 _pad_h, .param .b32 _pad_w, " << std::endl
         << "            .param .b32 _strideIc, .param .b32 _strideId, .param .b32 _strideIh, .param .b32 _strideIw, .param .b32 _strideIn, " << std::endl
         << "            .param .b32 _strideOk, .param .b32 _strideOm, .param .b32 _strideOp, .param .b32 _strideOq, .param .b32 _strideOn)" << std::endl;
@@ -175,12 +261,11 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  .reg .pred %in_bounds, %predloop;" << std::endl;
     iss << "  .reg .b32 %id, %id0, %bid0;" << std::endl;
     iss << "  .reg .b32 %trs, %tr, %t, %r, %s, %nexttrs, %nexttr, %nextt, %nextr, %nexts, %tdiff, %rdiff, %sdiff;" << std::endl;
-    iss << "  .reg .b32 %Npix, %Nfilt, %M, %P, %Q, %C, %mM, %mP, %mQ, %mC;" << std::endl;
+    iss << "  .reg .b32 %Npix, %Nfilt, %Dmpad, %Hmpad, %Wmpad, %D, %H, %W, %M, %P, %Q, %C, %mM, %mP, %mQ, %mC;" << std::endl;
     iss << "  .reg .b32 %pad_d, %pad_h, %pad_w;" << std::endl;
     iss << "  .reg .b32 %stride_d, %stride_h, %stride_w;" << std::endl;
     iss << "  .reg .b32 %strideIc, %strideId, %strideIh, %strideIw, %strideIn;" << std::endl;
     iss << "  .reg .b32 %strideOk, %strideOm, %strideOp, %strideOq, %strideOn;" << std::endl;
-    iss << "  .reg .b32 %readlut, %writelut;" << std::endl;
     iss << "  .reg .b32 %inci;" << std::endl;
     iss << "  .reg .b64 %pi, %pc;" << std::endl;
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
@@ -189,7 +274,7 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  .reg .b32 %offIncdhw;" << std::endl;
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
     for(size_t s = 0; s < vec_; s++){
-      iss << format("  .reg .b32 %offIncdhw{0}, %offIncdh{0}, %offIncd{0}, %offInc{0}, %offIw{0}, %offIcd{0}, %offIh{0}, %offIc{0}, %offId{0}, %offIn{0};", i + s) << std::endl;
+      iss << format("  .reg .b32 %offIncdhw{0}, %offIncdh{0}, %offIncd{0}, %offInc{0}, %offIw{0}, %offIcd{0}, %offIh{0}, %offIc{0}, %offId{0}, %offIn{0}, %dlo{0}, %dhi{0}, %hlo{0}, %hhi{0}, %wlo{0}, %whi{0}, %maskd{0}, %maskh{0}, %maskw{0};", i + s) << std::endl;
     }
     iss << "  .reg .b32 %TRS;" << std::endl;
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
@@ -202,8 +287,11 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << format("  .reg .b32 %Npixm<{0}>;", vec_) << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
-        iss << format("  .reg .pred %pred{0};", i + s) << std::endl;
-
+        iss << format("  .reg .pred %predi{0}, %pred{0};", i + s) << std::endl;
+    iss << "  .reg .b32 %offi, %maskf, %masks, %inc_i, %p_delta, %writelut, %readlut, %inc_delta, %p_inc_delta, %inc_mask, %p_inc_mask;" << std::endl;
+    for(size_t i = 0; i < cl0; i += vec_*bc0_)
+    for(size_t s = 0; s < vec_; s++)
+        iss << format("  .reg .b32 %offi{0}, %p_delta{0}, %inc_i{0}, %maski{0}, %p_mask{0};", i + s) << std::endl;
 
     iss << "  // Initialize C" << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
@@ -211,24 +299,22 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
       iss << format("  mov.b32 %rc{0}{1}, 0xff800000;", i, vs[s]) << std::endl;
 
     iss << std::endl;
-    iss << "  // Shared memory" << std::endl;
-    iss << format("  .shared .align 16 .b8 _shared[{}];", size_shmem) << std::endl;
-    iss << format("  .reg .b64 %shared64;") << std::endl;
-    iss << format("  .reg .b32 %shared;") << std::endl;
-    iss << format("  mov.u64 %shared64, _shared;") << std::endl;
-    iss << format("  cvt.u32.u64 %shared, %shared64;") << std::endl;
-
-    iss << std::endl;
     iss << "  ld.param.u64 %pc, [_pc];" << std::endl;
     iss << "  ld.param.u64 %pi, [_pi];" << std::endl;
     iss << "  ld.param.s32 %Npix, [_Npix];" << std::endl;
     iss << "  ld.param.s32 %Nfilt, [_Nfilt];" << std::endl;
     iss << std::endl;
-    iss << "  // Tensor shapes" << std::endl;
+    iss << "  // Output shapes" << std::endl;
     iss << "  ld.param.s32 %M, [_M];" << std::endl;
     iss << "  ld.param.s32 %P, [_P];" << std::endl;
     iss << "  ld.param.s32 %Q, [_Q];" << std::endl;
     iss << "  ld.param.s32 %C, [_C];" << std::endl;
+
+    iss << "  // Input" << std::endl;
+    iss << "  ld.param.s32 %D, [_D];" << std::endl;
+    iss << "  ld.param.s32 %H, [_H];" << std::endl;
+    iss << "  ld.param.s32 %W, [_W];" << std::endl;
+
     iss << std::endl;
     iss << "  // Padding/Striding" << std::endl;
     iss << "  ld.param.s32 %pad_d, [_pad_d];" << std::endl;
@@ -251,33 +337,32 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  ld.param.s32 %strideOp, [_strideOp];" << std::endl;
     iss << "  ld.param.s32 %strideOq, [_strideOq];" << std::endl;
     iss << "  ld.param.s32 %strideOn, [_strideOn];" << std::endl;
+
     iss << std::endl;
     iss << "  // Special registers" << std::endl;
     iss << "  mov.u32 %id0, %tid.x;" << std::endl;
     iss << "  mov.u32 %bid0, %ctaid.x;" << std::endl;
     iss << "  mov.u32 %id, %id0;" << std::endl;
+
     iss << std::endl;
-    iss << "  // Bounds checking" << std::endl;
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("  sub.s32 %Npixm{0}, %Npix, {0};", s) << std::endl;
-    iss << "  // Look-up table" << std::endl;
-    lut();
-    iss << std::endl;
-    iss << "  // pointers" << std::endl;
+    iss << "  /* LDG Lanes */" << std::endl;
     ptr_ldg_i();
+
     iss << std::endl;
-    iss << "  // pooling" << std::endl;
+    iss << "  /* Inner Loop */" << std::endl;
     iss << "  mov.u32 %TRS, %Nfilt;" << std::endl;
-    iss << "  mov.u32 %readlut, %shared;" << std::endl;
+    iss << "  setp.gt.u32 %predloop, %TRS, 0;" << std::endl;
+
     iss << "LOOP:" << std::endl;
+
+    iss << std::endl;
+    iss << "  /* Load */" << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
-      iss << format("  setp.lt.s32 %pred{}, %offIncdhw{}, %Npixm{};", i + s, i, s) << std::endl;
+      iss << format("  @%predi{0} ld.global.cg.{1} %rri{2}{3}, [%pi{0}];", i + s, io_dtype, i, vs[s])  << std::endl;
 
-    for(size_t i = 0; i < cl0; i += vec_*bc0_)
-    for(size_t s = 0; s < vec_; s++)
-      iss << format("  @%pred{0} ld.global.cg.{1} %rri{2}{3}, [%pi{0}];", i + s, io_dtype, i, vs[s])  << std::endl;
-
+    iss << std::endl;
+    iss << "  /* Max Pooling */" << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++){
       if(dtype_ == FLOAT_TYPE)
@@ -291,13 +376,16 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
       }
     }
 
-    iss << " // Increment image pointers" << std::endl;
-    iss << format("  ld.shared.u32 %inci, [%readlut + {}];", addr_lut) << std::endl;
-    for(size_t i = 0; i < cl0; i += vec_*bc0_)
+    iss << std::endl;
+    iss << "  /* Increment pointers */" << std::endl;
+    iss << format("  ld.const.b32 %inc_i, [%p_delta];") << std::endl;
+    iss << format("  add.s32 %p_delta, %p_delta, 4;") << std::endl;
+    for(size_t pqn = 0; pqn < cl0; pqn += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
-      iss << format("  mad.wide.u32 %pi{}, %inci, {}, %pi{};", i + s, 1, i + s) << std::endl;
+      iss << format("  mad.wide.s32 %pi{0}, %inc_i, 1, %pi{0};", pqn + s) << std::endl;
+
+    iss << "  /* Loop back */" << std::endl;
     iss << format("  sub.s32 %TRS, %TRS, 1;") << std::endl;
-    iss << format("  add.u32 %readlut, %readlut, 4;") << std::endl;
     iss << "  setp.gt.u32 %predloop, %TRS, 0;" << std::endl;
     iss << "  @%predloop bra.uni LOOP;" << std::endl;
 
@@ -312,7 +400,8 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  /* Write back */" << std::endl;
     for(size_t i = 0; i < cl0; i+= bc0_*vec_)
       iss << format("  mad.wide.s32 %pc{0}, %offc0_{0}, %strideOq, %pc;", i, dtsize) << std::endl;
-
+    for(size_t s = 0; s < vec_; ++s)
+      iss << format("  sub.s32 %Npixm{0}, %Npix, {0};", s) << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
       iss << format("  setp.lt.s32 %pred{}, %offc0_{}, %Npixm{};", i + s, i, s) << std::endl;
@@ -334,7 +423,7 @@ std::vector<unsigned int> Pool::tuning_params() const
 double Pool::tflops(param_t P, param_t Q, param_t M, param_t K, param_t N, param_t T, param_t R, param_t S, double time)
 { return (double)M*P*Q*K*N*T*R*S/(time*1e3); }
 
-void Pool::enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer& O){
+void Pool::enqueue(driver::Kernel& kernel, driver::Stream& stream, driver::Buffer const & I, driver::Buffer& O){
     // Data-type size
     int32_t dtsize = size_of(dtype_);
     // I strides
@@ -354,6 +443,13 @@ void Pool::enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer
     int32_t Npix = C_*M_*P_*Q_*N_;
     int32_t Nfilt = T_*R_*S_;
 
+    // Constant memory
+    driver::Buffer LUT = kernel.module().symbol("_LUT");
+    driver::Buffer masks = kernel.module().symbol("_masks");
+    stream.write(LUT, false, 0, cLUT.size()*4, cLUT.data());
+    stream.write(masks, false, 0, masks_.size()*4, masks_.data());
+
+    // Enqueue
     kernel.setArg(0, I);
     kernel.setArg(1, O);
     kernel.setArg(2, Npix);
@@ -362,31 +458,34 @@ void Pool::enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer
     kernel.setArg(5, P_);
     kernel.setArg(6, Q_);
     kernel.setArg(7, C_);
-    kernel.setArg(8, stride_d_);
-    kernel.setArg(9, stride_h_);
-    kernel.setArg(10, stride_w_);
-    kernel.setArg(11, pad_d_);
-    kernel.setArg(12, pad_h_);
-    kernel.setArg(13, pad_w_);
-    kernel.setArg(14, strideIc);
-    kernel.setArg(15, strideId);
-    kernel.setArg(16, strideIh);
-    kernel.setArg(17, strideIw);
-    kernel.setArg(18, strideIn);
-    kernel.setArg(19, strideOk);
-    kernel.setArg(20, strideOm);
-    kernel.setArg(21, strideOp);
-    kernel.setArg(22, strideOq);
-    kernel.setArg(23, strideOn);
+    kernel.setArg(8, D_);
+    kernel.setArg(9, H_);
+    kernel.setArg(10, W_);
+    kernel.setArg(11, stride_d_);
+    kernel.setArg(12, stride_h_);
+    kernel.setArg(13, stride_w_);
+    kernel.setArg(14, pad_d_);
+    kernel.setArg(15, pad_h_);
+    kernel.setArg(16, pad_w_);
+    kernel.setArg(17, strideIc);
+    kernel.setArg(18, strideId);
+    kernel.setArg(19, strideIh);
+    kernel.setArg(20, strideIw);
+    kernel.setArg(21, strideIn);
+    kernel.setArg(22, strideOk);
+    kernel.setArg(23, strideOm);
+    kernel.setArg(24, strideOp);
+    kernel.setArg(25, strideOq);
+    kernel.setArg(26, strideOn);
 
     int32_t cl0 = bc0_*cs0_;
     size_t grid0 = ceil(Npix, cl0);
-    try{
-      queue.enqueue(kernel, {grid0, 1, 1}, {bc0_, 1, 1});
-      queue.synchronize();
-    }catch(...){
-      exit(EXIT_FAILURE);
-    }
+//    try{
+      stream.enqueue(kernel, {grid0, 1, 1}, {bc0_, 1, 1});
+      stream.synchronize();
+//    }catch(...){
+//      exit(EXIT_FAILURE);
+//    }
 }
 
 

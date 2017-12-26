@@ -161,24 +161,24 @@ struct SC17{
     std::vector<pool_params_t> shapes;
 
     // 3D-Unet
-    shapes.push_back(std::make_tuple(dtype, 31, 204, 204, 4,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 29, 202, 202, 4,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 27, 100, 100, 4,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 25,  98,  98, 4,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 23,  48,  48, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 21,  46,  46, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 19,  22,  22, 4, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 17,  20,  20, 4, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 15,  36,  36, 4, 432, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 13,  36,  36, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 11,  34,  34, 4, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 4, 144, 1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 4, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 9 ,  62,  62, 4, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 7 , 120, 120, 4, 48,  1, 1, 1, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 5 , 120, 120, 4, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 3 , 118, 118, 4, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
-    shapes.push_back(std::make_tuple(dtype, 1 , 116, 116, 4, 24,  1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 31, 204, 204, 1,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 29, 202, 202, 1,  24, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 27, 100, 100, 1,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 25,  98,  98, 1,  72, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 23,  48,  48, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 21,  46,  46, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 19,  22,  22, 1, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 17,  20,  20, 1, 648, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 15,  36,  36, 1, 432, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 13,  36,  36, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 11,  34,  34, 1, 216, 3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 1, 144, 1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 11,  64,  64, 1, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 9 ,  62,  62, 1, 72,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 7 , 120, 120, 1, 48,  1, 1, 1, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 5 , 120, 120, 1, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 3 , 118, 118, 1, 24,  3, 3, 3, 0, 0, 0, 1, 1, 1));
+    shapes.push_back(std::make_tuple(dtype, 1 , 116, 116, 1, 24,  1, 1, 1, 0, 0, 0, 1, 1, 1));
 
     return shapes;
   }

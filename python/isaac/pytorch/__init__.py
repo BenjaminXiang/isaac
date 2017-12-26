@@ -79,10 +79,10 @@ class Conv3dCropCat(Conv3d):
         super(Conv3dCropCat, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, upsample, groups, bias, activation, alpha)
         
     def forward(self, x, z):
-        offset = [(z.size()[i]-x.size()[i])//2 for i in range(2,z.dim())]
+        offset = [(z.size()[i]-x.size()[i]*self.upsample[i - 2])//2 for i in range(2,z.dim())]
         bias = self.bias if self.bias is not None else torch.autograd.Variable()
         crop = (offset[0], offset[0], offset[1], offset[1], offset[2], offset[2])
-        return ConvNdFunction(self.activation, self.alpha, upsample=self.upsample)(x, self.weight, bias, z)
+        return ConvNdFunction(self.activation, self.alpha, upsample=self.upsample, crop=crop)(x, self.weight, bias, z)
 
 #############################
 ###      Pooling          ###
