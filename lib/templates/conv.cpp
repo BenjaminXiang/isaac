@@ -604,8 +604,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "{" << std::endl;
 
   // Predicates
-  iss << "  .reg.pred %in_bounds, %predcrs, %predloop, %predz, %predlut;" << std::endl;
-  iss << format("  .reg .pred %predk<{}>;", cs1_) << std::endl;
+  iss << "  .reg.pred %in_bounds, %predcrs, %predloop, %predz, %predgz, %predlut;" << std::endl;
+  iss << format("  .reg .pred %predk<{0}>, %predbias<{0}>;", cs1_) << std::endl;
   iss << format("  .reg .pred %pred<{}>;", vec_) << std::endl;
   for(size_t i = 0; i < cl0; i += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++){
@@ -1010,16 +1010,22 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t s = 0; s < vec_; s++)
     iss << format("  add.u32 %offc1_{}, {}, %offc1;", j + s, j*bc1_ + s) << std::endl;
 
+  iss << "  /* Predicates */" << std::endl;
+  iss << format("  setp.eq.s32 %predz, %idz, 0;") << std::endl;
+  iss << format("  setp.eq.and.s32 %predgz, %bidz, 0, %predz;") << std::endl;
+
   iss << std::endl;
   iss << "  /* Bias */" << std::endl;
   iss << format("  ld.param.u64 %bias, [_bias];") << std::endl;
-  iss << format("  setp.ne.b64 %has_bias, %bias, 0;") << std::endl;
+  iss << format("  setp.ne.and.b64 %has_bias, %bias, 0, %predgz;") << std::endl;
   iss << format("  @!%has_bias bra.uni BIAS_DONE;") << std::endl;
   iss << "DO_BIAS:" << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
     iss << format("  mad.wide.u32 %pbias{0}, %offc1_{0}, {1}, %bias;", j, in_dtsize) << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
-    iss << format("  @%predk{0} ld.global.{1} %rbias{0}, [%pbias{0}];", j, in_word_type) << std::endl;
+    iss << format("  setp.lt.s32 %predbias{0}, %offc1_{0}, %K;", j) << std::endl;
+  for(size_t j = 0; j < cs1_ ; j++)
+    iss << format("  @%predbias{0} ld.global.{1} %rbias{0}, [%pbias{0}];", j, in_word_type) << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
   for(size_t s = 0; s < vec_; ++s)
@@ -1086,10 +1092,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << std::endl;
   iss << "  /* Store result */" << std::endl;
-
-  iss << "  // Predicates" << std::endl;
-  iss << format("  setp.eq.s32 %predz, %idz, 0;") << std::endl;
-
   iss << "  // Pointers along K" << std::endl;
   for(size_t j = 0; j < cs1_; j++){
     iss << format("  mad.wide.s32 %pc{0}, %offc1_{0}, %strideOk, %pc;", j) << std::endl;
@@ -1191,7 +1193,6 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    float scale, // Quantization
                    driver::Buffer const *Z // Merge
                    ){
-
   // Data-type size
   // I strides
   int32_t strideIw = size_of(in_dtype_);
