@@ -72,11 +72,8 @@ Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, par
     size_t Nfilt = T_*R_*S_;
     size_t nlut = (block + Nfilt - 1)/Nfilt * Nfilt;
 
-    // Data-type size
-    int32_t dtsize = size_of(in_dtype_);
-
     // I strides
-    int32_t strideIw = dtsize;
+    int32_t strideIw = size_of(in_dtype_);
     int32_t strideIh = W_*strideIw;
     int32_t strideId = H_*strideIh;
     int32_t strideIc = D_*strideId;
@@ -248,27 +245,33 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
 std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   std::stringstream iss;
-  size_t dtsize = size_of(in_dtype_);
-  std::string compute_dtype = arith_str(in_dtype_);
-  std::string io_dtype = io_str(in_dtype_);
   size_t cl0 = bc0_*cs0_;
   size_t cl1 = cs1_*bc1_;
   size_t zl = zs_*bz_;
 
+  // data types
+  size_t in_dtsize = size_of(in_dtype_);
+  std::string in_compute_type = arith_str(in_dtype_);
+  std::string in_word_type = format("b{}", 8*in_dtsize);
+
+  size_t out_dtsize = size_of(out_dtype_);
+  std::string out_compute_type = arith_str(out_dtype_);
+  std::string out_word_type = format("b{}", 8*out_dtsize);
+
   // helpers
   size_t nthreads = bc0_*bc1_*bz_;
   size_t Nfilt = R_*S_*T_;
-  size_t cd_sharedi = dtsize*cl0;
-  size_t cd_sharedf = dtsize*cl1;
+  size_t cd_sharedi = in_dtsize*cl0;
+  size_t cd_sharedf = in_dtsize*cl1;
 
   size_t block = u_*zl;
   size_t nlut = (block + Nfilt - 1)/Nfilt * Nfilt;
   size_t size_sharedi = cd_sharedi*block;
   size_t size_sharedf = cd_sharedf*block;
   size_t size_tiles = next_pow2(2*(size_sharedi + size_sharedf));
-  size_t size_redc = dtsize*cl0*cl1*(bz_==1?0:bz_);
+  size_t size_redc = in_dtsize*cl0*cl1*(bz_==1?0:bz_);
   size_t size_shmem = std::max(size_redc, size_tiles);
-  size_t Bvec = vec_*dtsize;
+  size_t Bvec = vec_*in_dtsize;
   size_t addr_i = 0;
   size_t addr_f = size_sharedi;
   size_t double_buffer_off = size_tiles/2;
@@ -291,7 +294,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   auto declare_register_tile = [&](char x, size_t M, size_t N, size_t dtinc){
     for(size_t c = 0; c < zs_; c++){
       for(size_t m = 0 ; m < M ; m+=vec_*dtinc){
-        iss << format("  .reg {}.{}", vv, io_dtype);
+        iss << format("  .reg {}.{}", vv, in_word_type);
         for(size_t n = 0 ; n < N ; n++)
           iss << format("{} %r{}{}_{}_{}", n>0?",":"", x, c, m, n);
         iss << ";" << std::endl;
@@ -397,7 +400,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
       iss << format("  mad.lo.s32 %offi, %c, %strideIc, 0;") << std::endl;
       if(gridz_ > 1)
-        iss << format("  mad.lo.s32 %offi, %offc, %strideIc, %offi;", dtsize) << std::endl;
+        iss << format("  mad.lo.s32 %offi, %offc, %strideIc, %offi;") << std::endl;
       for(size_t pqn = 0; pqn < cl0; pqn += vec_*bf_pqn)
       for(size_t s = 0; s < vec_; s++){
         iss << format("  add.s32 %offId{0}, %offId{0}, %t;", pqn + s) << std::endl;
@@ -424,7 +427,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  mad.lo.u32 %offF, %offFk, %strideFk, 0;") << std::endl;
       iss << format("  mad.lo.u32 %offF, %idctrs, %strideFs, %offF;") << std::endl;
       if(gridz_ > 1)
-        iss << format("  mad.lo.u32 %offF, %offc, %strideFc, %offF;", dtsize) << std::endl;
+        iss << format("  mad.lo.u32 %offF, %offc, %strideFc, %offF;") << std::endl;
       iss << format("  mad.wide.u32 %pf, %offF, 1, %pf;") << std::endl;
       iss << format("  mul.lo.s32 %incf, {}, %strideFs;", block) << std::endl;
   };
@@ -433,10 +436,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  //Load I") << std::endl;
     for(size_t i = 0; i < cl0; i+=vec_*bf_pqn){
       for(size_t s = 0; s < vec_; ++s)
-        iss << format("  mov.b{1} %rri{2}{3}, 0;", i + s, 8*dtsize, i, vs[s]) << std::endl;
+        iss << format("  mov.{1} %rri{2}{3}, 0x0;", i + s, in_word_type, i, vs[s]) << std::endl;
       for(size_t s = 0; s < vec_; ++s)
-        iss << format("  @%predi{0} ld.global.nc.{1} %rri{2}{3}, [%pi{4}];", i + s, io_dtype, i, vs[s], i + s, s*dtsize) << std::endl;
-      iss << format("  st.shared{0}.{1} [%writei + {2}], %rri{3};", vv, io_dtype, i*dtsize, i) << std::endl;
+        iss << format("  @%predi{0} ld.global.nc.{1} %rri{2}{3}, [%pi{4}];", i + s, in_word_type, i, vs[s], i + s) << std::endl;
+      iss << format("  st.shared{0}.{1} [%writei + {2}], %rri{3};", vv, in_word_type, i*in_dtsize, i) << std::endl;
     }
   };
 
@@ -449,10 +452,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       for(size_t s = 0; s < (safe?vec_:0); ++s)
         iss << format("  setp.lt.and.s32 %pred{}, %offFk{}, %Km{}, %predcrs;", s, j, s) << std::endl;
       for(size_t s = 0; s < (safe?vec_:0); ++s)
-        iss << format("  mov.b{1} %rrf{2}{3}, 0;", preds[s], 8*dtsize, j, vs[s]) << std::endl;
+        iss << format("  mov.{1} %rrf{2}{3}, 0;", preds[s], in_word_type, j, vs[s]) << std::endl;
       for(size_t s = 0; s < vec_; ++s)
-        iss << format("  @{0} ld.global.nc.{1} %rrf{2}{3}, [%pf + {4}];", preds[s], io_dtype, j, vs[s], (j+s)*dtsize) << std::endl;
-      iss << format("  st.shared{1}.{2} [%writef + {4}], %rrf{3};", preds[0], vv, io_dtype, j, j*dtsize) << std::endl;
+        iss << format("  @{0} ld.global.nc.{1} %rrf{2}{3}, [%pf + {4}];", preds[s], in_word_type, j, vs[s], (j+s)*in_dtsize) << std::endl;
+      iss << format("  st.shared{1}.{2} [%writef + {4}], %rrf{3};", preds[0], vv, in_word_type, j, j*in_dtsize) << std::endl;
     }
   };
 
@@ -473,7 +476,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   auto lds = [&](char x, size_t nx, size_t ctrs, size_t cd_shared, size_t bs){
     for(size_t c = 0; c < zs_; c++)
     for(size_t rx = 0; rx < nx; rx+=vec_)
-      iss << format("  ld.shared{0}.{1} %r{2}{3}_{4}_{5}, [%read{2} + {6}];", vv, io_dtype, x, c, rx, ctrs%us_, rx*bs*dtsize + (c*bz_ + ctrs*zl)*cd_shared) << std::endl;
+      iss << format("  ld.shared{0}.{1} %r{2}{3}_{4}_{5}, [%read{2} + {6}];", vv, in_word_type, x, c, rx, ctrs%us_, rx*bs*in_dtsize + (c*bz_ + ctrs*zl)*cd_shared) << std::endl;
   };
 
 
@@ -488,9 +491,9 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       std::string ri = format("%ri{}_{}_{}{}", c, i, cc, vs[ii]);
       std::string rf = format("%rf{}_{}_{}{}", c, k, cc, vs[kk]);
       if(in_dtype_==INT8X4_TYPE)
-        iss << format("  dp4a.{0}.{0} {1}, {2}, {3}, {1};", compute_dtype, ro, ri, rf) << std::endl;
+        iss << format("  dp4a.{0}.{0} {1}, {2}, {3}, {1};", in_compute_type, ro, ri, rf) << std::endl;
       else
-        iss << format("  fma.rn.{0} {1}, {2}, {3}, {1};", compute_dtype, ro, ri, rf) << std::endl;
+        iss << format("  fma.rn.{0} {1}, {2}, {3}, {1};", in_compute_type, ro, ri, rf) << std::endl;
 
     }
   };
@@ -508,7 +511,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << ".func store_col(.reg .b64 %pc, .reg .b32 %Cs0";
   for(size_t i = 0; i < cs0_; i++) iss << format(", .reg .b32 %offc{}", i);
   for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", .reg .b32 %diffc{}", i);
-  for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", .reg {}.{} %rc{}", vv, io_dtype, i);
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", .reg {}.{} %rc{}", vv, in_word_type, i);
   iss << "){" << std::endl;
   iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
   iss << "// Predicates" << std::endl;
@@ -516,7 +519,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
   for(size_t s = 0; s < vec_; s+=c_inc){
-    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", c_aligned?vv:"", gridz_>1?compute_dtype:io_dtype, i, c_aligned?"":vs[s]) << std::endl;
+    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", c_aligned?vv:"", gridz_>1?in_compute_type:in_word_type, i, c_aligned?"":vs[s]) << std::endl;
     if(i + s < cs0_ - c_inc)
     iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
   }
@@ -531,7 +534,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "){" << std::endl;
   iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    iss << format("  .reg {}.{} %rz{};", vv, io_dtype, i);
+    iss << format("  .reg {}.{} %rz{};", vv, in_word_type, i);
 
   iss << "// Predicates" << std::endl;
   for(size_t i = 0 ; i < cs0_ ; i++)
@@ -540,13 +543,13 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t i = 0 ; i < cs0_ ; i+=vec_){
     // Load
     for(size_t s = 0; s < vec_; s+=z_inc){
-      iss << format("  @%predc{} ld.global{}.{} %rz{}{}, [%pz];", i + s, z_aligned?vv:"", io_dtype, i, z_aligned?"":vs[s]) << std::endl;
+      iss << format("  @%predc{} ld.global{}.{} %rz{}{}, [%pz];", i + s, z_aligned?vv:"", in_word_type, i, z_aligned?"":vs[s]) << std::endl;
       if(i + s < cs0_ - z_inc)
         iss << format("  mad.wide.s32 %pz, %diffz{0}, 1, %pz;", i + s) << std::endl;
     }
     // Concatenate store
     for(size_t s = 0; s < vec_; s+=c_inc){
-      iss << format("  @%predc{} st.global{}.{} [%pc], %rz{}{};", i + s, c_aligned?vv:"", io_dtype, i, c_aligned?"":vs[s]) << std::endl;
+      iss << format("  @%predc{} st.global{}.{} [%pc], %rz{}{};", i + s, c_aligned?vv:"", in_word_type, i, c_aligned?"":vs[s]) << std::endl;
       if(i + s < cs0_ - c_inc)
         iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
     }
@@ -595,27 +598,27 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b64 _bias," << std::endl
       << "            .param .b32 _alpha," << std::endl
       << "            .param .b32 _Zk, .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b32 _strideZn, .param .b32 _strideZk, .param .b32 _strideZm, .param .b32 _strideZp, .param .b32 _strideZq, .param .b64 _pz," << std::endl
-      << "            .param .b32 _bound)" << std::endl;
+      << "            .param .b32 _bound," << std::endl
+      << "            .param .b32 _scale)" << std::endl;
+
   iss << "{" << std::endl;
 
   // Predicates
   iss << "  .reg.pred %in_bounds, %predcrs, %predloop, %predz, %predlut;" << std::endl;
   iss << format("  .reg .pred %predk<{}>;", cs1_) << std::endl;
   iss << format("  .reg .pred %pred<{}>;", vec_) << std::endl;
-
   for(size_t i = 0; i < cl0; i += vec_*bf_pqn)
   for(size_t s = 0; s < vec_; s++){
     iss << format("  .reg .pred %predi{};", i + s) << std::endl;
     iss << format("  .reg .b32 %mask{};", i + s) << std::endl;
   }
   iss << format("  .reg .b32 %bound;") << std::endl;
-
-  // Split-K
-  iss << "  .reg .b32 %div, %rem, %offc;" << std::endl;
-  // Special registers
+  // Grid IDs
   iss << "  .reg .b32 %bid0, %bid1, %bidz;" << std::endl;
   iss << "  .reg .b32 %id, %id1pqn, %idz, %id0, %id1;" << std::endl;
   iss << "  .reg .b32 %afid0, %bfid1, %idctrs;" << std::endl;
+  // Split-K
+  iss << "  .reg .b32 %div, %rem, %offc;" << std::endl;
   // Look-up table
   iss << "  .reg .b32 %trs, %t, %c, %tr, %r, %s;" << std::endl;
   iss << "  .reg .b32 %maskf, %masks, %inc_delta, %p_inc_delta, %inc_mask, %p_inc_mask;" << std::endl;
@@ -624,18 +627,15 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  .reg .b32 %maski{0}, %p_mask{0};", i + s) << std::endl;
       iss << format("  .reg .b32 %p_delta{0}, %inc_i{0};", i + s) << std::endl;
   }
-
   // Tensor shapes
   iss << "  .reg .b32 %pad_d, %pad_h, %pad_w, %stride_d, %stride_h, %stride_w, %upsample_d, %upsample_h, %upsample_w;" << std::endl;
   iss << "  .reg .b32 %Npix, %Nfilt, %K, %C, %CTRS;" << std::endl;
   iss << "  .reg .b32 %D, %H, %W, %M, %P, %Q, %N, %MPQ, %Zk, %mN, %mP, %mM, %mQ, %mMPQ;" << std::endl;
-
   // Strides
   iss << format("  .reg .b32 %strideIc, %strideId, %strideIh, %strideIw, %strideIn;") << std::endl;
   iss << format("  .reg .b32 %strideFc, %strideFs, %strideFk;") << std::endl;
   iss << format("  .reg .b32 %strideOk, %strideOm, %strideOp, %strideOq, %strideOn;") << std::endl;
   iss << format("  .reg .b32 %strideZk, %strideZm, %strideZp, %strideZq, %strideZn;") << std::endl;
-
   // Pointers
   iss << format("  .reg .b64 %pi, %pf, %pc, %pz;") << std::endl;
   iss << format("  .reg .b32 %offi, %offF, %incf;") << std::endl;
@@ -682,18 +682,16 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  .reg.u32 %offc0_{0}, %offOn{0}, %offOmpq{0};", i + s) << std::endl;
     iss << format("  .reg.u32 %offZnmp{0}, %offZnm{0}, %offZn{0}, %offZm{0}, %offZp{0}, %offZq{0};", i + s) << std::endl;
   }
-
-
   iss << format("  .reg.b32 %offc1_<{}>;", cs1_) << std::endl;
   // Bounds checking
   iss << format("  .reg.s32 %Km<{0}>;", vec_) << std::endl;
   // LDG registers
   iss << format("  .reg .b32 %writei, %readi;") << std::endl;
   for(size_t pqn = 0; pqn < cl0; pqn+=vec_*bf_pqn)
-    iss << format("  .reg {}.{} %rri{};", vv, io_dtype, pqn) << std::endl;
+    iss << format("  .reg {}.{} %rri{};", vv, in_word_type, pqn) << std::endl;
   iss << format("  .reg .b32 %writef, %readf;") << std::endl;
   for(size_t k = 0; k < cl1; k+=vec_*bf_k)
-    iss << format("  .reg {}.{} %rrf{};", vv, io_dtype, k) << std::endl;
+    iss << format("  .reg {}.{} %rrf{};", vv, in_word_type, k) << std::endl;
   // Tiles
   iss << "  // For O tile" << std::endl;
   declare_register_tile('c', cs0_, cs1_, 1);
@@ -703,10 +701,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   declare_register_tile('f', cs1_, us_, 1);
   // Bias
   iss << format("  .reg .b64 %bias, %pbias<{}>;", cs1_) << std::endl;
-  iss << format("  .reg .{} %rbias<{}>;", io_dtype, cs1_) << std::endl;
+  iss << format("  .reg .{} %rbias<{}>;", in_word_type, cs1_) << std::endl;
   iss << format("  .reg .pred %has_bias;") << std::endl;
   // Quantization
-  iss << "  .reg .b32 %output_rescale;" << std::endl;
+  iss << "  .reg .b32 %scale;" << std::endl;
+
 
   iss << std::endl;
   iss << "  /* Initialize O */" << std::endl;
@@ -714,7 +713,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
   for(size_t k = 0; k < cs1_ ; ++k)
   for(size_t nn = 0; nn < vec_ ; ++nn)
-      iss << format("  mov.{} %rc{}_{}_{}{}, 0x0;", io_dtype, c, i, k, vs[nn]) << std::endl;
+      iss << format("  mov.{} %rc{}_{}_{}{}, 0x0;", in_word_type, c, i, k, vs[nn]) << std::endl;
 
 
   iss << "  // Load Param" << std::endl;
@@ -763,7 +762,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  ld.param.s32 %strideOn, [_strideOn];" << std::endl;
 
   iss << "  ld.param.s32 %bound, [_bound];" << std::endl;
-
+  iss << "  ld.param.b32 %scale, [_scale];" << std::endl;
 
   iss << "  // Shared memory" << std::endl;
   iss << format("  .shared .align 16 .b8 _shared[{}];", size_shmem) << std::endl;
@@ -938,7 +937,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t j = 0; j < cs1_; j ++)
   for(size_t i = 0; i < cs0_; i += vec_)
   for(size_t s = 0; s < vec_; s++)
-    iss << format("  add.{0} %rc0_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %rc0_{2}_{3}{4};", compute_dtype, c, i, j, vs[s]) << std::endl;
+    iss << format("  add.{0} %rc0_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %rc0_{2}_{3}{4};", in_compute_type, c, i, j, vs[s]) << std::endl;
 
   //Reduce in shared memory
   if(bz_>1)
@@ -947,41 +946,41 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << ".reg .b32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
     iss << ".reg .pred %predc;" << std::endl;
     for(size_t ij = 0; ij < cl0*cl1; ij += bc)
-      iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", io_dtype, ij) << std::endl;
+      iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", in_word_type, ij) << std::endl;
 
-    iss << format("  mad.lo.u32 %writek, %idz, {}, %shared;", cl0*cl1*dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %writek, %id1pqn, {}, %writek;", cs0_*cs1_*dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %idz, {}, %shared;", cl0*cl1*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id1pqn, {}, %writek;", cs0_*cs1_*in_dtsize) << std::endl;
 
     iss << "  bar.sync 0;" << std::endl;
     for(size_t j = 0; j < cs1_; j ++)
     for(size_t i = 0; i < cs0_; i += vec_)
     for(size_t s = 0; s < vec_; s++){
       size_t mn = i + j*cs0_;
-      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", io_dtype, (mn + s)*dtsize, i, j, vs[s]) << std::endl;
+      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (mn + s)*in_dtsize, i, j, vs[s]) << std::endl;
     }
     iss << "  bar.sync 0;" << std::endl;
 
     iss << std::endl;
     iss << format("  div.u32 %rid_mn, %id, {};", bz_) << std::endl;
     iss << format("  rem.u32 %rid_k, %id, {};", bz_) << std::endl;
-    iss << format("  mad.lo.u32 %readk, %rid_k, {}, %shared;", cl0*cl1*dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %readk, %rid_mn, {}, %readk;", dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %rid_k, {}, %shared;", cl0*cl1*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %rid_mn, {}, %readk;", in_dtsize) << std::endl;
     for(size_t c = bz_/2; c > 0; c /=2){
       iss << format("  setp.lt.u32 %predc, %rid_k, {};", c) << std::endl;
       for(size_t ij = 0; ij < cl0*cl1; ij += bc){
-        iss << format("  @%predc ld.shared.{} %rrk{}_0, [%readk + {}];", io_dtype, ij, (ij)*dtsize) << std::endl;
-        iss << format("  @%predc ld.shared.{} %rrk{}_1, [%readk + {}];", io_dtype, ij, (ij + c*cl0*cl1)*dtsize) << std::endl;
-        iss << format("  @%predc add.{0} %rrk{1}_0, %rrk{1}_0, %rrk{1}_1;", compute_dtype, ij) << std::endl;
-        iss << format("  @%predc st.shared.{} [%readk + {}], %rrk{}_0;", io_dtype, ij*dtsize, ij) << std::endl;
+        iss << format("  @%predc ld.shared.{} %rrk{}_0, [%readk + {}];", in_word_type, ij, (ij)*in_dtsize) << std::endl;
+        iss << format("  @%predc ld.shared.{} %rrk{}_1, [%readk + {}];", in_word_type, ij, (ij + c*cl0*cl1)*in_dtsize) << std::endl;
+        iss << format("  @%predc add.{0} %rrk{1}_0, %rrk{1}_0, %rrk{1}_1;", in_compute_type, ij) << std::endl;
+        iss << format("  @%predc st.shared.{} [%readk + {}], %rrk{}_0;", in_word_type, ij*in_dtsize, ij) << std::endl;
       }
       iss << "  bar.sync 0;" << std::endl;
     }
 
-    iss << format("  mad.lo.u32 %readk, %id1pqn, {}, %shared;", cs0_*cs1_*dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id1pqn, {}, %shared;", cs0_*cs1_*in_dtsize) << std::endl;
     for(size_t j = 0; j < cs1_; j ++)
     for(size_t i = 0; i < cs0_; i += vec_)
     for(size_t s = 0; s < vec_; s++){
-      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", io_dtype, i, j, vs[s], ((i+s) + j*cs0_)*dtsize) << std::endl;
+      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", in_word_type, i, j, vs[s], ((i+s) + j*cs0_)*in_dtsize) << std::endl;
     }
   }
 
@@ -996,7 +995,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
     for(size_t s = 0; s < vec_; ++s)
-      iss << format("   mul.f32 %rc0_{0}_{1}{2}, %output_rescale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("   mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
   }
 
   iss << "  /* Column offsets */" << std::endl;
@@ -1018,13 +1017,13 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  @!%has_bias bra.uni BIAS_DONE;") << std::endl;
   iss << "DO_BIAS:" << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
-    iss << format("  mad.wide.u32 %pbias{0}, %offc1_{0}, {1}, %bias;", j, dtsize) << std::endl;
+    iss << format("  mad.wide.u32 %pbias{0}, %offc1_{0}, {1}, %bias;", j, in_dtsize) << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
-    iss << format("  @%predk{0} ld.global.{1} %rbias{0}, [%pbias{0}];", j, io_dtype) << std::endl;
+    iss << format("  @%predk{0} ld.global.{1} %rbias{0}, [%pbias{0}];", j, in_word_type) << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
   for(size_t s = 0; s < vec_; ++s)
-    iss << format("  add.{0} %rc0_{1}_{2}{3}, %rc0_{1}_{2}{3}, %rbias{2};", compute_dtype, i, j, vs[s]) << std::endl;
+    iss << format("  add.{0} %rc0_{1}_{2}{3}, %rc0_{1}_{2}{3}, %rbias{2};", in_compute_type, i, j, vs[s]) << std::endl;
   iss << "BIAS_DONE:" << std::endl;
 
 
@@ -1060,6 +1059,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
     for(size_t s = 0; s < vec_; ++s)
       iss << format("   cvt.rni.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+
+
   }
 
 
@@ -1187,35 +1188,34 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, // Conv
                    driver::Buffer const *bias, // Bias
                    float alpha, // Relu
+                   float scale, // Quantization
                    driver::Buffer const *Z // Merge
                    ){
 
   // Data-type size
-  int32_t dtsize = size_of(in_dtype_);
-
   // I strides
-  int32_t strideIw = dtsize;
+  int32_t strideIw = size_of(in_dtype_);
   int32_t strideIh = W_*strideIw;
   int32_t strideId = H_*strideIh;
   int32_t strideIc = D_*strideId;
   int32_t strideIn = C_*strideIc;
 
   // F strides
-  int32_t strideFk = dtsize;
+  int32_t strideFk = size_of(in_dtype_);
   int32_t strideFs = K_*strideFk;
   int32_t strideFr = S_*strideFs;
   int32_t strideFt = R_*strideFr;
   int32_t strideFc = T_*strideFt;
 
   // O strides
-  int32_t strideOq = dtsize;
+  int32_t strideOq = size_of(out_dtype_);
   int32_t strideOp = Q_*strideOq;
   int32_t strideOm = P_*strideOp;
   int32_t strideOk = M_*strideOm;
   int32_t strideOn = (K_ + Zk_)*strideOk;
 
   // Z strides
-  int32_t strideZq = dtsize;
+  int32_t strideZq = size_of(out_dtype_);
   int32_t strideZp = Zq_*strideZq;
   int32_t strideZm = Zp_*strideZp;
   int32_t strideZk = Zm_*strideZm;
@@ -1307,10 +1307,12 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   kernel.setArg(46, strideZp);
   kernel.setArg(47, strideZq);
   kernel.setArg(48, Z?*Z:(uint64_t)0);
-  // Misc.
+  // Loop optimization
   kernel.setArg(49, bound);
+  // Quantization
+  kernel.setArg(50, scale);
   if(gridz_>1)
-    O.set_zero(stream, N_*(K_ + Zk_)*M_*P_*Q_*dtsize);
+    O.set_zero(stream, N_*(K_ + Zk_)*M_*P_*Q_*size_of(out_dtype_));
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
 }
 

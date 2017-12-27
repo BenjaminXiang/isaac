@@ -97,6 +97,8 @@ inline void crop_merge(std::vector<DTYPE> const & x, std::vector<DTYPE> const & 
 }
 
 
+
+
 template<class IN_DTYPE, class OUT_DTYPE>
 void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D, size_t H, size_t W, size_t C, size_t T, size_t R, size_t S,
                   size_t pad_d, size_t pad_h, size_t pad_w,
@@ -127,6 +129,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
 
   // CPU buffers
   size_t vect_c = (in_dtype==sc::INT8X4_TYPE)?4:1;
+
   std::vector<IN_DTYPE> image_c(N*C/vect_c*H*W*D);
   std::vector<IN_DTYPE> upsampled_c(N*C/vect_c*Hup*Wup*Dup);
   std::vector<IN_DTYPE> filters_c(K*C/vect_c*R*S*T);
@@ -168,7 +171,15 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.write(image, true, 0, image_c.size()*in_dtsize, image_c.data());
   stream.write(filters, true, 0, filters_c.size()*in_dtsize, filters_c.data());
   stream.write(z, true, 0, z_c.size()*out_dtsize, z_c.data());
-  sc::CONV(ctx.device(), stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, image, filters, output, NULL, activation, 0, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
+  sc::CONV(ctx.device(), stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W,
+           pad_d, pad_h, pad_w,
+           stride_d, stride_h, stride_w,
+           upsample_d, upsample_h, upsample_w,
+           image, filters, output,
+           NULL,
+           activation, 0,
+           1, Zk,
+           crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
   stream.read(output, true, 0, output_isaac_c.size()*out_dtsize, (void*)output_isaac_c.data());
 
   // Check correctness
@@ -181,7 +192,11 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<int> rgrid = {1, 8};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rs, rs, rl, r1, rgrid, rgrid})){
-    isaac::templates::Conv conv(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation,
+    isaac::templates::Conv conv(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S,
+                                pad_d, pad_h, pad_w,
+                                stride_d, stride_h, stride_w,
+                                upsample_d, upsample_h, upsample_w,
+                                activation,
                                 Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
@@ -196,7 +211,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{
-      conv.enqueue(kernel, stream, image, filters, output, NULL, 0, pz);
+      conv.enqueue(kernel, stream, image, filters, output, NULL, 0, 1., pz);
     }catch(isaac::driver::exception::cuda::launch_out_of_resources){
       continue;
     }
