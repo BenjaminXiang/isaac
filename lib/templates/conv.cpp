@@ -519,12 +519,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
   for(size_t s = 0; s < vec_; s+=c_inc){
-    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", c_aligned?vv:"", gridz_>1?in_compute_type:in_word_type, i, c_aligned?"":vs[s]) << std::endl;
+    iss << format("  @%predc{} {}{}.{} [%pc], %rc{}{};", i + s, gridz_>1?"red.add":"st.global", c_aligned?vv:"", out_compute_type, i, c_aligned?"":vs[s]) << std::endl;
     if(i + s < cs0_ - c_inc)
     iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
   }
   iss << "}" << std::endl;
-
 
   iss << std::endl;
   iss << ".func crop_merge_col(.reg .b64 %pz, .reg .b64 %pc, .reg .b32 %Cs0";
@@ -984,19 +983,19 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-  if(out_dtype_==INT8X4_TYPE){
-    iss << "/* Convert to FP32 */" << std::endl;
-    for(size_t j = 0; j < cs1_ ; j++)
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("   cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+  iss << "/* Convert to FP32 */" << std::endl;
+  for(size_t j = 0; j < cs1_ ; j++)
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+  for(size_t s = 0; s < vec_; ++s)
+    iss << format("   cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
 
-    iss << "/* Scale */" << std::endl;
-    for(size_t j = 0; j < cs1_ ; j++)
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("   mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-  }
+//  if(in_dtype_==INT8X4_TYPE){
+//    iss << "/* Scale */" << std::endl;
+//    for(size_t j = 0; j < cs1_ ; j++)
+//    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+//    for(size_t s = 0; s < vec_; ++s)
+//      iss << format("   mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+//  }
 
   iss << "  /* Column offsets */" << std::endl;
   iss << format("  mov.s32 %bid0, %ctaid.x;") << std::endl;
