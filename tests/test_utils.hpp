@@ -16,7 +16,7 @@ bool is_correct(std::vector<T> const & iO, std::vector<T> const & rO, double eps
   }
   for(size_t i = 0 ; i < iO.size(); ++i){
     T io = iO[i], ro = rO[i];
-    if(std::abs((io - ro)/(ro==0?1:ro)) > eps || std::isnan(io)){
+    if(std::abs(float(io - ro)/(ro==0?1:ro)) > eps || std::isnan(io)){
       std::cout << "idx " << i << ": " <<  io << " != " << ro << std::endl;
       return false;
     }

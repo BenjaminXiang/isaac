@@ -192,7 +192,7 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
     for(size_t i = 0; i < x.size(); ++i)
       x[i] = params[m*x.size() + i];
     DType dtype = (DType)(x[0]);
-    param_t vec = x[5], bc0 = x[6], bc1 = x[7], cs0 = x[8], cs1 = x[9], u = x[10], zs = x[11], bz = x[12];
+    param_t vec = x[5], bc0 = x[6], bc1 = x[7], cs0 = x[8], cs1 = x[9], u = x[10], zs = x[11], bz = x[12], gridz = x[13];
 
     //Features
     param_t dtsize = size_of(dtype);
@@ -235,7 +235,8 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
                   && (nthreads <= device.max_threads_per_block())
                   && (n_instructions() <= 1024)
                   && (vec*dtsize <= 16)
-                  && (block <= 32);
+                  && (block <= 32)
+                  && (dtype!=INT8X4_TYPE || gridz==1);
     valid[m] = is_valid;
   }
 }
@@ -270,7 +271,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   size_t size_sharedf = cd_sharedf*block;
   size_t size_tiles = next_pow2(2*(size_sharedi + size_sharedf));
   size_t size_redc = in_dtsize*cl0*cl1*(bz_==1?0:bz_);
-  size_t size_shmem = std::max(size_redc, size_tiles);
+  size_t size_pack = in_dtsize*cl0*cl1*(out_dtype_==INT8X4_TYPE?1:0);
+  size_t size_shmem = std::max(std::max(size_pack, size_redc), size_tiles);
   size_t Bvec = vec_*in_dtsize;
   size_t addr_i = 0;
   size_t addr_f = size_sharedi;
@@ -281,7 +283,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   size_t bf_pqn = bf_k;
 
   uint8_t is_valid;
-  uint32_t params[] = {in_dtype_, N_*P_*Q_*M_, K_, C_, R_*S_*T_, vec_, bc0_, bc1_, cs0_, cs1_, u_, zs_, bz_, gridz_};
+  uint32_t params[] = {out_dtype_, N_*P_*Q_*M_, K_, C_, R_*S_*T_, vec_, bc0_, bc1_, cs0_, cs1_, u_, zs_, bz_, gridz_};
   check_valid(device, 1, params, &is_valid);
   if(!is_valid)
     throw invalid_parameters();
@@ -614,7 +616,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .b32 %bound;") << std::endl;
   // Grid IDs
   iss << "  .reg .b32 %bid0, %bid1, %bidz;" << std::endl;
-  iss << "  .reg .b32 %id, %id1pqn, %idz, %id0, %id1;" << std::endl;
+  iss << "  .reg .b32 %id, %idslice, %idz, %id0, %id1;" << std::endl;
   iss << "  .reg .b32 %afid0, %bfid1, %idctrs;" << std::endl;
   // Split-K
   iss << "  .reg .b32 %div, %rem, %offc;" << std::endl;
@@ -703,6 +705,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .{} %rbias<{}>;", in_word_type, cs1_) << std::endl;
   iss << format("  .reg .pred %has_bias;") << std::endl;
   // Quantization
+  iss << ".reg .b32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
+  iss << ".reg .pred %predc;" << std::endl;
   iss << "  .reg .b32 %scale;" << std::endl;
 
 
@@ -776,8 +780,8 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  mov.u32 %id0, %tid.x;" << std::endl;
   iss << "  mov.u32 %id1, %tid.y;" << std::endl;
   iss << "  mov.u32 %idz, %tid.z;" << std::endl;
-  iss << format("  mad.lo.u32 %id1pqn, %id1, {}, %id0;", bc0_) << std::endl;
-  iss << format("  mad.lo.u32 %id, %id1pqn, {}, %idz;", bz_) << std::endl;
+  iss << format("  mad.lo.u32 %idslice, %id1, {}, %id0;", bc0_) << std::endl;
+  iss << format("  mad.lo.u32 %id, %idslice, {}, %idz;", bz_) << std::endl;
 
   iss << std::endl;
   iss << "  // Block ID" << std::endl;
@@ -942,13 +946,11 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   if(bz_>1)
   {
     size_t bc = nthreads/bz_;
-    iss << ".reg .b32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
-    iss << ".reg .pred %predc;" << std::endl;
     for(size_t ij = 0; ij < cl0*cl1; ij += bc)
       iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", in_word_type, ij) << std::endl;
 
     iss << format("  mad.lo.u32 %writek, %idz, {}, %shared;", cl0*cl1*in_dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %writek, %id1pqn, {}, %writek;", cs0_*cs1_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %idslice, {}, %writek;", cs0_*cs1_*in_dtsize) << std::endl;
 
     iss << "  bar.sync 0;" << std::endl;
     for(size_t j = 0; j < cs1_; j ++)
@@ -975,7 +977,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << "  bar.sync 0;" << std::endl;
     }
 
-    iss << format("  mad.lo.u32 %readk, %id1pqn, {}, %shared;", cs0_*cs1_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %idslice, {}, %shared;", cs0_*cs1_*in_dtsize) << std::endl;
     for(size_t j = 0; j < cs1_; j ++)
     for(size_t i = 0; i < cs0_; i += vec_)
     for(size_t s = 0; s < vec_; s++){
@@ -983,19 +985,14 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-  iss << "/* Convert to FP32 */" << std::endl;
-  for(size_t j = 0; j < cs1_ ; j++)
-  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-  for(size_t s = 0; s < vec_; ++s)
-    iss << format("   cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+  if(in_dtype_ == INT8X4_TYPE){
+    iss << "/* Convert to FP32 */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s)
+      iss << format("   cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+  }
 
-//  if(in_dtype_==INT8X4_TYPE){
-//    iss << "/* Scale */" << std::endl;
-//    for(size_t j = 0; j < cs1_ ; j++)
-//    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-//    for(size_t s = 0; s < vec_; ++s)
-//      iss << format("   mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-//  }
 
   iss << "  /* Column offsets */" << std::endl;
   iss << format("  mov.s32 %bid0, %ctaid.x;") << std::endl;
@@ -1059,14 +1056,53 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
 
   if(out_dtype_==INT8X4_TYPE){
-    iss << "/* Quantize */" << std::endl;
+    iss << std::endl;
+    iss << "  /* Scale */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
     for(size_t s = 0; s < vec_; ++s)
-      iss << format("   cvt.rni.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
 
+    iss << std::endl;
+    iss << "  /* Saturate */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s)
+      iss << format("  cvt.rzi.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
 
+    iss << std::endl;
+    iss << "  /* Pack */" << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id1, {}, %writek;", cl0*vec_*in_dtsize) << std::endl;
+    iss << format("  bar.sync 0;") << std::endl;
+    for(size_t j = 0; j < cs1_; j += vec_)
+    for(size_t i = 0; i < cs0_; i += vec_)
+    for(size_t ii = 0; ii < vec_; ii++)
+    for(size_t jj = 0; jj < vec_; jj++)
+      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (i*bc0_ + ii + (j*bc1_ + jj)*cl0)*in_dtsize, i, j + jj, vs[ii]) << std::endl;
+    iss << format("  bar.sync 0;") << std::endl;
+
+    iss << format("  mad.lo.u32 %readk, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id1, {}, %readk;", cl0*cs1_*in_dtsize) << std::endl;
+    for(size_t j = 0; j < cs1_; j += vec_)
+    for(size_t i = 0; i < cs0_; i += vec_)
+    for(size_t ii = 0; ii < vec_; ii++)
+    for(size_t jj = 0; jj < vec_; jj++)
+      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%writek + {}];", in_word_type, i, j + jj, vs[ii], (i*bc0_ + ii + (j+ jj)*cl0)*in_dtsize) << std::endl;
+
+    for(size_t j = 0; j < cs1_ ; j+=4)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s){
+      for(size_t jj = 1; jj < 4; ++jj)
+        iss << format("  shl.b32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, {3};", i, j + jj, vs[s], 8*jj) << std::endl;
+      for(size_t jj = 1; jj < 4; ++jj)
+        iss << format("  or.b32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %rc0_{0}_{3}{2};", i, j, vs[s], j + jj) << std::endl;
+    }
   }
+
+//  std::cout << vec_ << std::endl;
+
+//  std::cout << iss.str() << std::endl;
 
 
   iss << std::endl;
