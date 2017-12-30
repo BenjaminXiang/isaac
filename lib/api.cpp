@@ -69,11 +69,6 @@ void CONV(driver::Device const &, driver::Stream & stream,
           param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
           templates::Conv* generator)
 {
-  size_t vect_c = (in_dtype==INT8X4_TYPE)?4:1;
-  if(C % vect_c != 0)
-    throw std::runtime_error("Number of channels must be a multiple of VECT_C");
-  C /= vect_c;
-
   typedef std::tuple<driver::Stream, DType, DType, std::vector<param_t>> key_type;
   // Build the generator if necessary
   static cpp::CachedMap<key_type, std::shared_ptr<templates::Conv>> inference([&](key_type const & key){

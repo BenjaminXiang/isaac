@@ -190,14 +190,16 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType in_dtype, DTy
                                     param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1,
                                     size_t num_re_evaluate)
 {
+  param_t PACK_IN = (in_dtype==INT8X4_TYPE)?4:1;
+
   driver::Device const & device = stream.context().device();
   benchmark_t benchmark;
   std::unique_ptr<driver::Buffer> O, I, F;
   if(num_re_evaluate > 1)
   {
     O.reset(new driver::Buffer(stream.context(), K*M*P*Q*N*size_of(out_dtype)));
-    I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(in_dtype)));
-    F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(in_dtype)));
+    I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(in_dtype)/PACK_IN));
+    F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(in_dtype)/PACK_IN));
     benchmark = [&](std::vector<param_t> const& x){
       templates::Conv generator(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation,
                                 0, 0, 0, 0, 0, 0, 0,
@@ -208,7 +210,7 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType in_dtype, DTy
       return bench([&](){ generator.enqueue(kernel, stream, *I, *F, *O); }, [&](){ stream.synchronize(); }, device);
     };
   }
-  std::vector<param_t> shapes{out_dtype, N*M*P*Q, K, C, T*R*S};
+  std::vector<param_t> shapes{out_dtype, N*M*P*Q, K, C/PACK_IN, T*R*S};
   std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid, benchmark, num_re_evaluate);
   return templates::Conv(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S,
                          pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,

@@ -62,6 +62,14 @@ Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, par
   upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
   vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(gridz)
 {
+    // Handle packed layouts
+    size_t vect_c = (in_dtype_==INT8X4_TYPE)?4:1;
+    if(C_ % vect_c != 0)
+      throw std::runtime_error("Number of channels must be a multiple of VECT_C");
+    C_ /= vect_c;
+
+
+
     // Cropping shapes
     Zm_ = M_ + z_crop_m0_ + z_crop_m1_;
     Zp_ = P_ + z_crop_p0_ + z_crop_p1_;
