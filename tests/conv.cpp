@@ -252,7 +252,6 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   if(!is_correct(output_isaac_c, ground_truth_c, max_rounding_error(float(C))))
     exit(EXIT_FAILURE);
 
-
   std::vector<int> rv = {1, 2, 4};
   std::vector<int> rl = {1, 8};
   std::vector<int> rs = {1, 4};
