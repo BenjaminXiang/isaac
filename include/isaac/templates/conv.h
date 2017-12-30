@@ -88,6 +88,7 @@ private:
   param_t C_;
   param_t N_;
   param_t K_;
+  param_t Kout_;
   // Input dimensions
   param_t D_;
   param_t H_;

@@ -65,10 +65,16 @@ Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, par
     // Handle packed layouts
     size_t vect_c = (in_dtype_==INT8X4_TYPE)?4:1;
     if(C_ % vect_c != 0)
-      throw std::runtime_error("Number of channels must be a multiple of VECT_C");
+      throw std::runtime_error("Number of input channels must be a multiple of VECT_C");
     C_ /= vect_c;
 
-
+    size_t vect_k = (out_dtype_==INT8X4_TYPE)?4:1;
+    if(K_ % vect_k != 0)
+      throw std::runtime_error("Number of output channels must be a multiple of VECT_C");
+    if(Zk_ % vect_k != 0)
+      throw std::runtime_error("Number of concatenation channels must be a multiple of VECT_C");
+    Kout_ = K_ / vect_k;
+    Zk_ /= vect_k;
 
     // Cropping shapes
     Zm_ = M_ + z_crop_m0_ + z_crop_m1_;
@@ -244,7 +250,8 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
                   && (n_instructions() <= 1024)
                   && (vec*dtsize <= 16)
                   && (block <= 32)
-                  && (dtype!=INT8X4_TYPE || gridz==1);
+                  && (dtype!=INT8X4_TYPE || gridz==1)
+                  && (dtype!=INT8X4_TYPE || cs1 % 4 == 0);
     valid[m] = is_valid;
   }
 }
@@ -266,6 +273,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   size_t out_dtsize = size_of(out_dtype_);
   std::string out_compute_type = arith_str(out_dtype_);
   std::string out_word_type = format("b{}", 8*out_dtsize);
+  size_t vect_k = (out_dtype_==INT8X4_TYPE)?4:1;
 
   // helpers
   size_t nthreads = bc0_*bc1_*bz_;
@@ -594,7 +602,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << ".entry " << name << "(" << std::endl
       << "            .param .b64 _pi, .param .b64 _pf, .param .b64 _po," << std::endl
-      << "            .param .b32 _Npix, .param .b32 _Nfilt, .param .b32 _K, .param .b32 _C," << std::endl
+      << "            .param .b32 _Npix, .param .b32 _Nfilt, .param .b32 _K, .param .b32 _Kout, .param .b32 _C," << std::endl
       << "            .param .b32 _M, .param .b32 _P, .param .b32 _Q, .param .b32 _N," << std::endl
       << "            .param .b32 _D, .param .b32 _H, .param .b32 _W," << std::endl
       << "            .param .b32 _MPQ," << std::endl
@@ -638,7 +646,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
   // Tensor shapes
   iss << "  .reg .b32 %pad_d, %pad_h, %pad_w, %stride_d, %stride_h, %stride_w, %upsample_d, %upsample_h, %upsample_w;" << std::endl;
-  iss << "  .reg .b32 %Npix, %Nfilt, %K, %C, %CTRS;" << std::endl;
+  iss << "  .reg .b32 %Npix, %Nfilt, %K, %Kout, %C, %CTRS;" << std::endl;
   iss << "  .reg .b32 %D, %H, %W, %M, %P, %Q, %N, %MPQ, %Zk, %mN, %mP, %mM, %mQ, %mMPQ;" << std::endl;
   // Strides
   iss << format("  .reg .b32 %strideIc, %strideId, %strideIh, %strideIw, %strideIn;") << std::endl;
@@ -734,6 +742,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  ld.param.u64 %pf, [_pf];") << std::endl;
   iss << "  ld.param.s32 %Zk, [_Zk];" << std::endl;
   iss << "  ld.param.s32 %K, [_K];" << std::endl;
+  iss << "  ld.param.s32 %Kout, [_Kout];" << std::endl;
   iss << "  ld.param.s32 %C, [_C];" << std::endl;
   iss << "  ld.param.s32 %D, [_D];" << std::endl;
   iss << "  ld.param.s32 %H, [_H];" << std::endl;
@@ -1063,54 +1072,55 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-//  if(out_dtype_==INT8X4_TYPE){
-//    iss << std::endl;
-//    iss << "  /* Scale */" << std::endl;
-//    for(size_t j = 0; j < cs1_ ; j++)
-//    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-//    for(size_t s = 0; s < vec_; ++s)
-//      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+  if(out_dtype_==INT8X4_TYPE){
+    iss << std::endl;
+    iss << "  /* Scale */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s)
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
 
-//    iss << std::endl;
-//    iss << "  /* Saturate */" << std::endl;
-//    for(size_t j = 0; j < cs1_ ; j++)
-//    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-//    for(size_t s = 0; s < vec_; ++s)
-//      iss << format("  cvt.rzi.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+    iss << std::endl;
+    iss << "  /* Saturate */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s)
+      iss << format("  cvt.rzi.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
 
-//    iss << std::endl;
-//    iss << "  /* Pack */" << std::endl;
-//    iss << format("  mad.lo.u32 %writek, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
-//    iss << format("  mad.lo.u32 %writek, %id1, {}, %writek;", cl0*vec_*in_dtsize) << std::endl;
-//    iss << format("  bar.sync 0;") << std::endl;
-//    for(size_t j = 0; j < cs1_; j += vec_)
-//    for(size_t i = 0; i < cs0_; i += vec_)
-//    for(size_t ii = 0; ii < vec_; ii++)
-//    for(size_t jj = 0; jj < vec_; jj++)
-//      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (i*bc0_ + ii + (j*bc1_ + jj)*cl0)*in_dtsize, i, j + jj, vs[ii]) << std::endl;
-//    iss << format("  bar.sync 0;") << std::endl;
+    iss << std::endl;
+    iss << "  /* Pack */" << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id1, {}, %writek;", cl0*vec_*in_dtsize) << std::endl;
+    iss << format("  bar.sync 0;") << std::endl;
+    for(size_t j = 0; j < cs1_; j += vec_)
+    for(size_t i = 0; i < cs0_; i += vec_)
+    for(size_t ii = 0; ii < vec_; ii++)
+    for(size_t jj = 0; jj < vec_; jj++)
+      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (i*bc0_ + ii + (j*bc1_ + jj)*cl0)*in_dtsize, i, j + jj, vs[ii]) << std::endl;
+    iss << format("  bar.sync 0;") << std::endl;
 
-//    iss << format("  mad.lo.u32 %readk, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
-//    iss << format("  mad.lo.u32 %readk, %id1, {}, %readk;", cl0*cs1_*in_dtsize) << std::endl;
-//    for(size_t j = 0; j < cs1_; j += vec_)
-//    for(size_t i = 0; i < cs0_; i += vec_)
-//    for(size_t ii = 0; ii < vec_; ii++)
-//    for(size_t jj = 0; jj < vec_; jj++)
-//      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%writek + {}];", in_word_type, i, j + jj, vs[ii], (i*bc0_ + ii + (j+ jj)*cl0)*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id1, {}, %readk;", cl0*cs1_*in_dtsize) << std::endl;
+    for(size_t j = 0; j < cs1_; j += vec_)
+    for(size_t i = 0; i < cs0_; i += vec_)
+    for(size_t ii = 0; ii < vec_; ii++)
+    for(size_t jj = 0; jj < vec_; jj++)
+      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%writek + {}];", in_word_type, i, j + jj, vs[ii], (i*bc0_ + ii + (j+ jj)*cl0)*in_dtsize) << std::endl;
 
-//    for(size_t j = 0; j < cs1_ ; j+=4)
-//    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-//    for(size_t s = 0; s < vec_; ++s){
-//      for(size_t jj = 1; jj < 4; ++jj)
-//        iss << format("  shl.b32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, {3};", i, j + jj, vs[s], 8*jj) << std::endl;
-//      for(size_t jj = 1; jj < 4; ++jj)
-//        iss << format("  or.b32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %rc0_{0}_{3}{2};", i, j, vs[s], j + jj) << std::endl;
-//    }
-//  }
+    for(size_t j = 0; j < cs1_ ; j+=4)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s){
+      for(size_t jj = 1; jj < 4; ++jj)
+        iss << format("  shl.b32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, {3};", i, j + jj, vs[s], 8*jj) << std::endl;
+      for(size_t jj = 1; jj < 4; ++jj)
+        iss << format("  or.b32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %rc0_{0}_{3}{2};", i, j, vs[s], j + jj) << std::endl;
+    }
 
-//  std::cout << vec_ << std::endl;
-
-//  std::cout << iss.str() << std::endl;
+    iss << format("  mad.lo.s32 %offc1, %bid1, {}, 0;", cl1/vect_k) << std::endl;
+    iss << format("  mad.lo.s32  %offc1, %id1, {}, %offc1;", cs1_/vect_k) << std::endl;
+    for(size_t j = 0; j < cs1_/vect_k; j++)
+      iss << format("  add.u32 %offc1_{0}, {0}, %offc1;", j) << std::endl;
+  }
 
 
   iss << std::endl;
@@ -1136,7 +1146,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << std::endl;
   iss << "  /* Store result */" << std::endl;
   iss << "  // Pointers along K" << std::endl;
-  for(size_t j = 0; j < cs1_; j++){
+  for(size_t j = 0; j < cs1_/vect_k; j++){
     iss << format("  mad.wide.s32 %pc{0}, %offc1_{0}, %strideOk, %pc;", j) << std::endl;
     iss << format("  mad.wide.s32 %pc{0}, %offc_0, 1, %pc{0};", j) << std::endl;
   }
@@ -1146,15 +1156,17 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << format("  sub.s32 %diffc{0}, %offc_{1}, %offc_{0};", i, i + c_inc) << std::endl;
 
   iss << "  // Write back" << std::endl;
-  for(size_t j = 0; j < cs1_; j++){
-    iss << format("  setp.lt.and.s32 %predk{0}, %offc1_{0}, %K, %predz;", j) << std::endl;
+  for(size_t j = 0; j < cs1_/vect_k; j++){
+    iss << format("  setp.lt.and.s32 %predk{0}, %offc1_{0}, %Kout, %predz;", j) << std::endl;
     iss << format("  @%predk{0} call.uni store_col, (%pc{0}, %Npix", j);
     for(size_t i = 0 ; i < cs0_ ; i+=vec_) for(size_t s = 0; s < vec_; s++) iss << format(", %offc0_{}", i*bc0_ + s);
     for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", %diffc{}", i);
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", %rc0_{}_{}", i, j);
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_) iss << format(", %rc0_{}_{}", i, j*vect_k);
     iss << ");" << std::endl;
   }
 
+//  std::cout << iss.str() << std::endl;
+//  std::cout << cs1_ << " " << vec_ << std::endl;
 
   if(Zk_ > 0){
     iss << std::endl;
@@ -1204,12 +1216,12 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     for(size_t j = 0; j < cs1_; j++){
       iss << format("  mad.wide.s32 %pz{0}, %offc1_{0}, %strideZk, %pz;", j) << std::endl;
       iss << format("  mad.wide.s32 %pz{0}, %offz_0, 1, %pz{0};", j) << std::endl;
-      iss << format("  mad.wide.s32 %pc{0}, %K, %strideOk, %pc{0};", j) << std::endl;
+      iss << format("  mad.wide.s32 %pc{0}, %Kout, %strideOk, %pc{0};", j) << std::endl;
     }
 
     iss << std::endl;
     iss << "CROP_MERGE:" << std::endl;
-    for(size_t j = 0; j < cs1_; j++){
+    for(size_t j = 0; j < cs1_/vect_k; j++){
       iss << format("  setp.lt.and.s32 %predk{0}, %offc1_{0}, %Zk, %predz;", j) << std::endl;
       iss << format("  @%predk{0} call.uni crop_merge_col, (%pz{0}, %pc{0}, %Npix", j);
       for(size_t i = 0 ; i < cs0_ ; i+=vec_) for(size_t s = 0; s < vec_; s++) iss << format(", %offc0_{}", i*bc0_ + s);
@@ -1256,7 +1268,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   int32_t strideOp = Q_*strideOq;
   int32_t strideOm = P_*strideOp;
   int32_t strideOk = M_*strideOm;
-  int32_t strideOn = (K_ + Zk_)*strideOk;
+  int32_t strideOn = (Kout_ + Zk_)*strideOk;
 
   // Z strides
   int32_t strideZq = size_of(out_dtype_);
@@ -1303,60 +1315,62 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   kernel.setArg(3, Npix);
   kernel.setArg(4, Nfilt);
   kernel.setArg(5, K_);
-  kernel.setArg(6, C_);
-  kernel.setArg(7, M_);
-  kernel.setArg(8, P_);
-  kernel.setArg(9, Q_);
-  kernel.setArg(10, N_);
-  kernel.setArg(11, D_*upsample_d_);
-  kernel.setArg(12, H_*upsample_h_);
-  kernel.setArg(13, W_*upsample_w_);
-  kernel.setArg(14, MPQ);
-  kernel.setArg(15, pad_d_);
-  kernel.setArg(16, pad_h_);
-  kernel.setArg(17, pad_w_);
-  kernel.setArg(18, stride_d_);
-  kernel.setArg(19, stride_h_);
-  kernel.setArg(20, stride_w_);
-  kernel.setArg(21, upsample_d_);
-  kernel.setArg(22, upsample_h_);
-  kernel.setArg(23, upsample_w_);
-  kernel.setArg(24, strideIc);
-  kernel.setArg(25, strideId);
-  kernel.setArg(26, strideIh);
-  kernel.setArg(27, strideIw);
-  kernel.setArg(28, strideIn);
+  kernel.setArg(6, Kout_);
+
+  kernel.setArg(7, C_);
+  kernel.setArg(8, M_);
+  kernel.setArg(9, P_);
+  kernel.setArg(10, Q_);
+  kernel.setArg(11, N_);
+  kernel.setArg(12, D_*upsample_d_);
+  kernel.setArg(13, H_*upsample_h_);
+  kernel.setArg(14, W_*upsample_w_);
+  kernel.setArg(15, MPQ);
+  kernel.setArg(16, pad_d_);
+  kernel.setArg(17, pad_h_);
+  kernel.setArg(18, pad_w_);
+  kernel.setArg(19, stride_d_);
+  kernel.setArg(20, stride_h_);
+  kernel.setArg(21, stride_w_);
+  kernel.setArg(22, upsample_d_);
+  kernel.setArg(23, upsample_h_);
+  kernel.setArg(24, upsample_w_);
+  kernel.setArg(25, strideIc);
+  kernel.setArg(26, strideId);
+  kernel.setArg(27, strideIh);
+  kernel.setArg(28, strideIw);
+  kernel.setArg(29, strideIn);
   // O strides
-  kernel.setArg(29, strideOk);
-  kernel.setArg(30, strideOm);
-  kernel.setArg(31, strideOp);
-  kernel.setArg(32, strideOq);
-  kernel.setArg(33, strideOn);
+  kernel.setArg(30, strideOk);
+  kernel.setArg(31, strideOm);
+  kernel.setArg(32, strideOp);
+  kernel.setArg(33, strideOq);
+  kernel.setArg(34, strideOn);
   // F strides
-  kernel.setArg(34, strideFk);
-  kernel.setArg(35, strideFc);
-  kernel.setArg(36, strideFs);
+  kernel.setArg(35, strideFk);
+  kernel.setArg(36, strideFc);
+  kernel.setArg(37, strideFs);
   // Bias
-  kernel.setArg(37, bias?*bias:(uint64_t)0);
+  kernel.setArg(38, bias?*bias:(uint64_t)0);
   // ReLU
-  kernel.setArg(38, size_of(a.dtype()), a.data());
+  kernel.setArg(39, size_of(a.dtype()), a.data());
   // Crop-Merge
-  kernel.setArg(39, Zk_);
-  kernel.setArg(40, z_crop_m0_);
-  kernel.setArg(41, z_crop_p0_);
-  kernel.setArg(42, z_crop_q0_);
-  kernel.setArg(43, strideZn);
-  kernel.setArg(44, strideZk);
-  kernel.setArg(45, strideZm);
-  kernel.setArg(46, strideZp);
-  kernel.setArg(47, strideZq);
-  kernel.setArg(48, Z?*Z:(uint64_t)0);
+  kernel.setArg(40, Zk_);
+  kernel.setArg(41, z_crop_m0_);
+  kernel.setArg(42, z_crop_p0_);
+  kernel.setArg(43, z_crop_q0_);
+  kernel.setArg(44, strideZn);
+  kernel.setArg(45, strideZk);
+  kernel.setArg(46, strideZm);
+  kernel.setArg(47, strideZp);
+  kernel.setArg(48, strideZq);
+  kernel.setArg(49, Z?*Z:(uint64_t)0);
   // Loop optimization
-  kernel.setArg(49, bound);
+  kernel.setArg(50, bound);
   // Quantization
-  kernel.setArg(50, scale);
+  kernel.setArg(51, scale);
   if(gridz_>1)
-    O.set_zero(stream, N_*(K_ + Zk_)*M_*P_*Q_*size_of(out_dtype_));
+    O.set_zero(stream, N_*(Kout_ + Zk_)*M_*P_*Q_*size_of(out_dtype_));
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
 }
 

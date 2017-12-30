@@ -163,7 +163,7 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
       int32_t w = qq + s;
       bool in_bounds = (d >= 0 && h >= 0 && w >= 0 && d < D && h < H && w < W);
       IN_DTYPE i = in_bounds?I[idx(n, c, d, h, w, N, C, D, H, W)]:0;
-      IN_DTYPE f = F[idx(c, t, r, s, k*PACK_OUT + kk, C, T, R, S, K)];
+      IN_DTYPE f = F[idx(c, t, r, s, k*PACK_OUT + kk, C, T, R, S, K*PACK_OUT)];
       tmp[kk] += dot(i, f);
     }
     for(int32_t kk = 0; kk < PACK_OUT; ++kk)
@@ -249,6 +249,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.read(output, true, 0, output_isaac_c);
 
   // Check correctness
+//  std::cout << std::hex << output_isaac_c[0] << " " << ground_truth_c[0] << std::endl;
   if(!is_correct(output_isaac_c, ground_truth_c, max_rounding_error(float(C))))
     exit(EXIT_FAILURE);
 
@@ -313,7 +314,7 @@ int main(){
   std::cout << "===============" << std::endl;
   std::cout << "CONV: FPROP" << std::endl;
   std::cout << "-----------" << std::endl;
-  do_test<int, float>(ctx, "core", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, int>(ctx, "core", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
 
 //  do_test<float, float>(ctx, "core", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
 //  do_test<float, float>(ctx, "upsample", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, false, 0, 0, 0, 0, 0, 0, 0);

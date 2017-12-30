@@ -191,13 +191,14 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType in_dtype, DTy
                                     size_t num_re_evaluate)
 {
   param_t PACK_IN = (in_dtype==INT8X4_TYPE)?4:1;
+  param_t PACK_OUT = (out_dtype==INT8X4_TYPE)?4:1;
 
   driver::Device const & device = stream.context().device();
   benchmark_t benchmark;
   std::unique_ptr<driver::Buffer> O, I, F;
   if(num_re_evaluate > 1)
   {
-    O.reset(new driver::Buffer(stream.context(), K*M*P*Q*N*size_of(out_dtype)));
+    O.reset(new driver::Buffer(stream.context(), K*M*P*Q*N*size_of(out_dtype)/PACK_OUT));
     I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(in_dtype)/PACK_IN));
     F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(in_dtype)/PACK_IN));
     benchmark = [&](std::vector<param_t> const& x){
