@@ -201,9 +201,10 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   // CPU buffers
   size_t PACK_IN = pack_increment<IN_DTYPE>::VALUE;
   size_t PACK_OUT = pack_increment<OUT_DTYPE>::VALUE;
-  std::vector<IN_DTYPE> image_c(N*C*H*W*D/PACK_IN);
-  std::vector<IN_DTYPE> upsampled_c(N*C*Hup*Wup*Dup/PACK_IN);
-  std::vector<IN_DTYPE> filters_c(K*C*R*S*T/PACK_IN);
+  C /= PACK_IN;
+  std::vector<IN_DTYPE> image_c(N*C*H*W*D);
+  std::vector<IN_DTYPE> upsampled_c(N*C*Hup*Wup*Dup);
+  std::vector<IN_DTYPE> filters_c(K*C*R*S*T);
   std::vector<float> bias_c(K);
   std::vector<OUT_DTYPE> conv_c(N*K*M*P*Q/PACK_OUT);
   std::vector<OUT_DTYPE> z_c(N*Zk*Zm*Zp*Zq/PACK_OUT);
@@ -222,7 +223,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
 
   // Ground truth
   upsample(image_c, upsampled_c, N, C, D, H, W, upsample_d, upsample_h, upsample_w);
-  cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c.data(), upsampled_c.data(), filters_c.data(), bias_c.data(), scale);
+  cpp_conv_nchw(C*PACK_IN, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c.data(), upsampled_c.data(), filters_c.data(), bias_c.data(), scale);
   crop_merge(conv_c, z_c, ground_truth_c, N, K, M, P, Q, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1); //crop_merge
 
   // Isaac
@@ -237,7 +238,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.write(filters, false, 0, filters_c);
   stream.write(z, false, 0, z_c);
   stream.write(bias, false, 0, bias_c);
-  sc::CONV(ctx.device(), stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W,
+  sc::CONV(ctx.device(), stream, in_dtype, out_dtype, N, K, M, P, Q, C*PACK_IN, T, R, S, D, H, W,
            pad_d, pad_h, pad_w,
            stride_d, stride_h, stride_w,
            upsample_d, upsample_h, upsample_w,
