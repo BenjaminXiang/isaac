@@ -1089,23 +1089,23 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
     iss << std::endl;
     iss << "  /* Pack */" << std::endl;
-    iss << format("  mad.lo.u32 %writek, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %writek, %id1, {}, %writek;", cl0*vec_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id0, {}, %shared;", vec_*out_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id1, {}, %writek;", cl0*vec_*out_dtsize) << std::endl;
     iss << format("  bar.sync 0;") << std::endl;
     for(size_t j = 0; j < cs1_; j += vec_)
     for(size_t i = 0; i < cs0_; i += vec_)
     for(size_t ii = 0; ii < vec_; ii++)
     for(size_t jj = 0; jj < vec_; jj++)
-      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (i*bc0_ + ii + (j*bc1_ + jj)*cl0)*in_dtsize, i, j + jj, vs[ii]) << std::endl;
+      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (i*bc0_ + ii + (j*bc1_ + jj)*cl0)*out_dtsize, i, j + jj, vs[ii]) << std::endl;
     iss << format("  bar.sync 0;") << std::endl;
 
-    iss << format("  mad.lo.u32 %readk, %id0, {}, %shared;", vec_*in_dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %readk, %id1, {}, %readk;", cl0*cs1_*in_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id0, {}, %shared;", vec_*out_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id1, {}, %readk;", cl0*cs1_*out_dtsize) << std::endl;
     for(size_t j = 0; j < cs1_; j += vec_)
     for(size_t i = 0; i < cs0_; i += vec_)
     for(size_t ii = 0; ii < vec_; ii++)
     for(size_t jj = 0; jj < vec_; jj++)
-      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%writek + {}];", in_word_type, i, j + jj, vs[ii], (i*bc0_ + ii + (j+ jj)*cl0)*in_dtsize) << std::endl;
+      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", in_word_type, i, j + jj, vs[ii], (i*bc0_ + ii + (j+ jj)*cl0)*out_dtsize) << std::endl;
 
     for(size_t j = 0; j < cs1_ ; j+=4)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)

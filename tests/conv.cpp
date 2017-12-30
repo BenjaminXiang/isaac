@@ -249,7 +249,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.read(output, true, 0, output_isaac_c);
 
   // Check correctness
-//  std::cout << std::hex << output_isaac_c[0] << " " << ground_truth_c[0] << std::endl;
+//  std::cout << idx(0, 2, 0, 0, 0, N, K/PACK_OUT, M, P, Q) << " " << output_isaac_c[idx(0, 2, 0, 0, 0, N, K/PACK_OUT, M, P, Q)] << " " << ground_truth_c[idx(0, 2, 0, 0, 0, N, K/PACK_OUT, M, P, Q)] << std::endl;
   if(!is_correct(output_isaac_c, ground_truth_c, max_rounding_error(float(C))))
     exit(EXIT_FAILURE);
 
@@ -278,7 +278,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{
-      conv.enqueue(kernel, stream, image, filters, output, pbias, 0, 1., pz);
+      conv.enqueue(kernel, stream, image, filters, output, pbias, 0, scale, pz);
     }catch(isaac::driver::exception::cuda::launch_out_of_resources){
       continue;
     }
@@ -310,7 +310,7 @@ int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t 
 int main(){
   auto ctx = drv::backend::contexts::get_default();
   std::cout << "===============" << std::endl;
-  std::cout << " FLOAT x INT:" << std::endl;
+  std::cout << " INT x INT:" << std::endl;
   std::cout << "===============" << std::endl;
   std::cout << "CONV: FPROP" << std::endl;
   std::cout << "-----------" << std::endl;
