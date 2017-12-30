@@ -283,11 +283,13 @@ void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::ActivationType activation = sc::Linear;
 
   size_t vect_c = (in_dtype==sc::INT8X4_TYPE)?4:1;
+  size_t vect_k = (out_dtype==sc::INT8X4_TYPE)?4:1;
+
   sc::DType ab_dtype = (out_dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:out_dtype;
   sc::scalar alpha(1., ab_dtype);
   sc::scalar beta(0., ab_dtype);
 
-  sc::driver::Buffer O(ctx, N*K*M*P*Q*sc::size_of(out_dtype));
+  sc::driver::Buffer O(ctx, N*K/vect_k*M*P*Q*sc::size_of(out_dtype));
   sc::driver::Buffer I(ctx, C/vect_c*D*H*W*N*sc::size_of(in_dtype));
   sc::driver::Buffer F(ctx, K*C/vect_c*T*R*S*sc::size_of(in_dtype));
 

@@ -225,7 +225,8 @@ void Conv::check_valid(driver::Device const & device, size_t M, param_t* params,
     param_t size_sharedf = cd_sharedf*block;
     param_t param_tiles = next_pow2(2*(size_sharedi + size_sharedf));
     param_t size_redc = dtsize*cl0*cl1*(bz==1?0:bz);
-    param_t size_shmem = std::max(size_redc, param_tiles);
+    param_t size_pack = dtsize*bc0*cl1*(dtype==INT8X4_TYPE?1:0);
+    param_t size_shmem = std::max(std::max(size_pack, size_redc), param_tiles);
 
     param_t bf_ctrs = block;
     param_t bf_k = nthreads/bf_ctrs;
@@ -287,7 +288,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   size_t size_sharedf = cd_sharedf*block;
   size_t size_tiles = next_pow2(2*(size_sharedi + size_sharedf));
   size_t size_redc = in_dtsize*cl0*cl1*(bz_==1?0:bz_);
-  size_t size_pack = in_dtsize*cl0*cl1*(out_dtype_==INT8X4_TYPE?1:0);
+  size_t size_pack = in_dtsize*bc0_*cl1*(out_dtype_==INT8X4_TYPE?1:0);
   size_t size_shmem = std::max(std::max(size_pack, size_redc), size_tiles);
   size_t Bvec = vec_*in_dtsize;
   size_t addr_i = 0;
@@ -1089,23 +1090,22 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
     iss << std::endl;
     iss << "  /* Pack */" << std::endl;
-    iss << format("  mad.lo.u32 %writek, %id0, {}, %shared;", vec_*out_dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %writek, %id1, {}, %writek;", cl0*vec_*out_dtsize) << std::endl;
-    iss << format("  bar.sync 0;") << std::endl;
-    for(size_t j = 0; j < cs1_; j += vec_)
-    for(size_t i = 0; i < cs0_; i += vec_)
-    for(size_t ii = 0; ii < vec_; ii++)
-    for(size_t jj = 0; jj < vec_; jj++)
-      iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (i*bc0_ + ii + (j*bc1_ + jj)*cl0)*out_dtsize, i, j + jj, vs[ii]) << std::endl;
-    iss << format("  bar.sync 0;") << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id0, {}, %shared;", out_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %writek, %id1, {}, %writek;", bc0_*vec_*out_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id0, {}, %shared;", out_dtsize) << std::endl;
+    iss << format("  mad.lo.u32 %readk, %id1, {}, %readk;", bc0_*cs1_*out_dtsize) << std::endl;
 
-    iss << format("  mad.lo.u32 %readk, %id0, {}, %shared;", vec_*out_dtsize) << std::endl;
-    iss << format("  mad.lo.u32 %readk, %id1, {}, %readk;", cl0*cs1_*out_dtsize) << std::endl;
-    for(size_t j = 0; j < cs1_; j += vec_)
     for(size_t i = 0; i < cs0_; i += vec_)
-    for(size_t ii = 0; ii < vec_; ii++)
-    for(size_t jj = 0; jj < vec_; jj++)
-      iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", in_word_type, i, j + jj, vs[ii], (i*bc0_ + ii + (j+ jj)*cl0)*out_dtsize) << std::endl;
+    for(size_t ii = 0; ii < vec_; ii++){
+      iss << format("  bar.sync 0;") << std::endl;
+      for(size_t j = 0; j < cs1_; j += vec_)
+      for(size_t jj = 0; jj < vec_; jj++)
+        iss << format("  st.shared.{} [%writek + {}], %rc0_{}_{}{};", in_word_type, (j*bc1_ + jj)*bc0_*out_dtsize, i, j + jj, vs[ii]) << std::endl;
+      iss << format("  bar.sync 0;") << std::endl;
+      for(size_t j = 0; j < cs1_; j += vec_)
+      for(size_t jj = 0; jj < vec_; jj++)
+        iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", in_word_type, i, j + jj, vs[ii], (j+ jj)*bc0_*out_dtsize) << std::endl;
+    }
 
     for(size_t j = 0; j < cs1_ ; j+=4)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
