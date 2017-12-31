@@ -57,7 +57,7 @@ public:
   // Execution
   std::string dump(driver::Device const & device, std::string const & name);
   std::vector<param_t> tuning_params() const;
-  void enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, driver::Buffer const * bias = NULL, float alpha = 0, float scale = 1, driver::Buffer const *Z = NULL);
+  void enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, driver::Buffer const * bias = NULL, float alpha = 0, float iscale = 1, float fscale = 1, float oscale = 1, driver::Buffer const *Z = NULL);
   // Validity
   static void output_shapes(param_t D, param_t H, param_t W, param_t T, param_t R, param_t S, param_t pad_d,
                             param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,

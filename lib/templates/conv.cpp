@@ -617,7 +617,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _alpha," << std::endl
       << "            .param .b32 _Zk, .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b32 _strideZn, .param .b32 _strideZk, .param .b32 _strideZm, .param .b32 _strideZp, .param .b32 _strideZq, .param .b64 _pz," << std::endl
       << "            .param .b32 _bound," << std::endl
-      << "            .param .b32 _scale)" << std::endl;
+      << "            .param .b32 _iscale, .param .b32 _fscale, .param .b32 _oscale)" << std::endl;
 
   iss << "{" << std::endl;
 
@@ -724,7 +724,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   // Quantization
   iss << ".reg .b32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
   iss << ".reg .pred %predc;" << std::endl;
-  iss << "  .reg .b32 %scale;" << std::endl;
+  iss << "  .reg .b32 %scale, %iscale, %fscale, %oscale;" << std::endl;
 
 
   iss << std::endl;
@@ -783,7 +783,9 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  ld.param.s32 %strideOn, [_strideOn];" << std::endl;
 
   iss << "  ld.param.s32 %bound, [_bound];" << std::endl;
-  iss << "  ld.param.b32 %scale, [_scale];" << std::endl;
+  iss << "  ld.param.b32 %iscale, [_iscale];" << std::endl;
+  iss << "  ld.param.b32 %fscale, [_fscale];" << std::endl;
+  iss << "  ld.param.b32 %oscale, [_oscale];" << std::endl;
 
   iss << "  // Shared memory" << std::endl;
   iss << format("  .shared .align 16 .b8 _shared[{}];", size_shmem) << std::endl;
@@ -1004,13 +1006,25 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
 
   if(in_dtype_ == INT8X4_TYPE){
+    iss << format("  mul.f32 %scale, %iscale, %fscale;") << std::endl;
+    iss << format("  div.approx.f32 %scale, 1., %scale;") << std::endl;
     iss << "/* Convert to FP32 */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s)
+    for(size_t s = 0; s < vec_; ++s){
       iss << format("   cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+    }
   }
 
+  if(out_dtype_ == INT8X4_TYPE){
+    iss << std::endl;
+    iss << "  /* Scale */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s)
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %oscale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+  }
 
   iss << "  /* Column offsets */" << std::endl;
   iss << format("  mov.s32 %bid0, %ctaid.x;") << std::endl;
@@ -1031,19 +1045,25 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << std::endl;
   iss << "  /* Bias */" << std::endl;
   iss << format("  ld.param.u64 %bias, [_bias];") << std::endl;
-  iss << format("  setp.ne.and.b64 %has_bias, %bias, 0, %predgz;") << std::endl;
+  iss << format("  setp.ne.b64 %has_bias, %bias, 0;") << std::endl;
   iss << format("  @!%has_bias bra.uni BIAS_DONE;") << std::endl;
   iss << "DO_BIAS:" << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
     iss << format("  mad.wide.u32 %pbias{0}, %offc1_{0}, {1}, %bias;", j, in_dtsize) << std::endl;
   for(size_t j = 0; j < cs1_ ; j++)
-    iss << format("  setp.lt.s32 %predbias{0}, %offc1_{0}, %K;", j) << std::endl;
-  for(size_t j = 0; j < cs1_ ; j++)
+    iss << format("  setp.lt.and.s32 %predbias{0}, %offc1_{0}, %K, %predgz;", j) << std::endl;
+  for(size_t j = 0; j < cs1_ ; j++){
     iss << format("  @%predbias{0} ld.global.{1} %rbias{0}, [%pbias{0}];", j, in_word_type) << std::endl;
+    iss << format("  @!%predbias{0} mov.{1} %rbias{0}, 0;", j, in_word_type) << std::endl;
+  }
+  if(out_dtype_==INT8X4_TYPE){
+  for(size_t j = 0; j < cs1_ ; j++)
+    iss << format("  mul.f32 %rbias{0}, %oscale, %rbias{0};", j) << std::endl;
+  }
   for(size_t j = 0; j < cs1_ ; j++)
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
   for(size_t s = 0; s < vec_; ++s)
-    iss << format("  add.{0} %rc0_{1}_{2}{3}, %rc0_{1}_{2}{3}, %rbias{2};", in_compute_type, i, j, vs[s]) << std::endl;
+    iss << format("  add.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %rbias{1};", i, j, vs[s]) << std::endl;
   iss << "BIAS_DONE:" << std::endl;
 
 
@@ -1074,13 +1094,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
 
   if(out_dtype_==INT8X4_TYPE){
-    iss << std::endl;
-    iss << "  /* Scale */" << std::endl;
-    for(size_t j = 0; j < cs1_ ; j++)
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-
     iss << std::endl;
     iss << "  /* Saturate */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
@@ -1245,7 +1258,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O, // Conv
                    driver::Buffer const *bias, // Bias
                    float alpha, // Relu
-                   float scale, // Quantization
+                   float iscale, float fscale, float oscale, // Quantization
                    driver::Buffer const *Z // Merge
                    ){
   // Data-type size
@@ -1368,7 +1381,9 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // Loop optimization
   kernel.setArg(50, bound);
   // Quantization
-  kernel.setArg(51, scale);
+  kernel.setArg(51, iscale);
+  kernel.setArg(52, fscale);
+  kernel.setArg(53, oscale);
   if(gridz_>1)
     O.set_zero(stream, N_*(Kout_ + Zk_)*M_*P_*Q_*size_of(out_dtype_));
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});

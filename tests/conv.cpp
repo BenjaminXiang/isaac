@@ -133,7 +133,8 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
               int32_t stride_d, int32_t stride_h, int32_t stride_w,
               int32_t M, int32_t P, int32_t Q,
               OUT_DTYPE* O, IN_DTYPE* I, IN_DTYPE* F,
-              float* bias, float scale)
+              float* bias,
+              float iscale, float fscale, float oscale)
 {
   static const int PACK_IN = pack_increment<IN_DTYPE>::VALUE;
   static const int PACK_OUT = pack_increment<OUT_DTYPE>::VALUE;
@@ -167,10 +168,14 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
       tmp[kk] += dot(i, f);
     }
     for(int32_t kk = 0; kk < PACK_OUT; ++kk)
-      tmp[kk] += bias[k*PACK_OUT + kk];
-    O[idx(n, k, m, p, q, N, K, M, P, Q)] = quantize_pack<OUT_DTYPE>(tmp, scale);
+      tmp[kk] += oscale*bias[k*PACK_OUT + kk];
+    O[idx(n, k, m, p, q, N, K, M, P, Q)] = quantize_pack<OUT_DTYPE>(tmp, oscale/(iscale*fscale));
   }
 }
+
+template<class T>
+bool abs_cmp(T a, T b)
+{ return std::abs(a) < std::abs(b);}
 
 template<class IN_DTYPE, class OUT_DTYPE>
 void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D, size_t H, size_t W, size_t C, size_t T, size_t R, size_t S,
@@ -218,11 +223,14 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     filters_c[i] = (float)rand()/RAND_MAX*10;
   for(size_t i = 0; i < bias_c.size(); ++i)
     bias_c[i] = has_bias?(float)rand()/RAND_MAX*10:0;
-  float scale = (out_dtype==sc::INT8X4_TYPE)?1./(C*R*S*T)*5.:1.;
+  // Scales
+  float iscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(image_c.begin(), image_c.end(), abs_cmp<IN_DTYPE>)):1;
+  float fscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(filters_c.begin(), filters_c.end(), abs_cmp<IN_DTYPE>)):1;
+  float oscale = (out_dtype==sc::INT8X4_TYPE)?((float)127 / (C*R*S*T)*5.):1;
 
   // Ground truth
   upsample(image_c, upsampled_c, N, C/PACK_IN, D, H, W, upsample_d, upsample_h, upsample_w);
-  cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c.data(), upsampled_c.data(), filters_c.data(), bias_c.data(), scale);
+  cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c.data(), upsampled_c.data(), filters_c.data(), bias_c.data(), iscale, fscale, oscale);
   crop_merge(conv_c, z_c, ground_truth_c, N, K, M, P, Q, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1); //crop_merge
 
   // Isaac
@@ -244,8 +252,8 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
            image, filters, output,
            pbias,
            activation, 0,
-           scale, Zk,
-           crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
+           iscale, fscale, oscale,
+           Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
   stream.read(output, true, 0, output_isaac_c);
 
   // Check correctness
@@ -278,7 +286,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{
-      conv.enqueue(kernel, stream, image, filters, output, pbias, 0, scale, pz);
+      conv.enqueue(kernel, stream, image, filters, output, pbias, 0, iscale, fscale, oscale, pz);
     }catch(isaac::driver::exception::cuda::launch_out_of_resources){
       continue;
     }
@@ -309,7 +317,6 @@ int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t 
 
 int main(){
   auto ctx = drv::backend::contexts::get_default();
-  std::cout << std::hex << " " << int16_t(-32769) << std::endl;
   std::cout << "===============" << std::endl;
   std::cout << "FPROP:" << std::endl;
   std::cout << "===============" << std::endl;

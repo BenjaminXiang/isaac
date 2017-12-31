@@ -8,105 +8,81 @@ import isaac.pytorch
 from time import time
 import timeit
 
-def ConvBiasActivation(in_num, out_num, kernel_size, function, alpha):
-    conv = nn.Conv3d(in_num, out_num, kernel_size=kernel_size, padding=0, stride=1, bias=True)
-    if function == 'relu':
-        act = nn.LeakyReLU(alpha)
-    if function == 'sigmoid':
-        act = nn.Sigmoid()
-    if function == 'linear':
-        return nn.Sequential(conv)
-    return nn.Sequential(conv, act)
 
-class UpConvCropCat(nn.Module):
-    def __init__(self, strides, in_num, out_num):
-        super(UpConvCropCat, self).__init__()
-        self.upsample = nn.ConvTranspose3d(in_num, in_num, strides, strides, groups=in_num, bias=False)
-        self.upsample.weight.data.fill_(1.0)
-        torch.manual_seed(0)
-        self.conv_bias_relu = ConvBiasActivation(in_num, out_num, (1, 1, 1), function = 'linear', alpha = 1)
+class UNetBuilder(nn.Module):
 
-
-    def forward(self, x, z):
-        x = self.upsample(x)
-        x = self.conv_bias_relu(x)
-        offset = [(z.size()[i]-x.size()[i])//2 for i in range(2,z.dim())]
-        return torch.cat([x, z[:,:,offset[0]:offset[0]+x.size(2),
-                                offset[1]:offset[1]+x.size(3),
-                                offset[2]:offset[2]+x.size(4)]], 1)
-
-
-class UNet3D(nn.Module):
-
-    def ConvBiasActivation(self, in_num, out_num, kernel_size, function, alpha, with_isaac):
-        if with_isaac:
-            return isaac.pytorch.Conv3d(in_num, out_num, kernel_size, activation=function, alpha=alpha)
-        else:
-            return ConvBiasActivation(in_num, out_num, kernel_size, function, alpha)
-
-    def UpConvCropCat(self, strides, in_num, out_num, with_isaac):
-        if with_isaac:
-            torch.manual_seed(0)
-            return isaac.pytorch.Conv3dCropCat(in_num, out_num, (1,1,1), upsample=strides, activation = 'linear', bias = True)
-        else:
-            return UpConvCropCat((1,2,2), in_num, out_num)
-
-    def MaxPool(self, kernel_size, stride, with_isaac):
-        if with_isaac:
-            return isaac.pytorch.MaxPool3d(kernel_size, stride)
-        else:
-            return nn.MaxPool3d(kernel_size, stride)
-
-    def __init__(self, in_num=1, out_num=3, filters=[24,72,216,648],relu_slope=0.005,with_isaac=False):
-        super(UNet3D, self).__init__()
-        if len(filters) != 4:
-            raise AssertionError
-        filters = [in_num] + filters
+    def __init__(self, out_num=3, filters=[1,24,72,216,648], relu_slope=0.005, with_isaac=False):
+        super(UNetBuilder, self).__init__()
+        # Attributes
+        self.relu_slope = relu_slope
+        self.filters = filters
         self.depth = len(filters) - 1
-        self.with_isaac = with_isaac
+        self.out_num = out_num
 
         # Downward convolutions
-        self.down_conv = nn.ModuleList([nn.Sequential(
-                self.ConvBiasActivation(filters[x  ], filters[x+1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac),
-                self.ConvBiasActivation(filters[x+1], filters[x+1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac))
-                   for x in range(0, self.depth)])
-        # Pooling
-        self.pool = nn.ModuleList([self.MaxPool((1,2,2), (1,2,2), with_isaac = with_isaac)
-                   for x in range(self.depth)])
-
-        # Upsampling
-        self.upsample = nn.ModuleList([self.UpConvCropCat((1,2,2), filters[x], filters[x-1], with_isaac = with_isaac) for x in range(self.depth, 1, -1)])
-
+        self.down_conv = nn.ModuleList([isaac.pytorch.VggBlock(filters[x], filters[x+1], 3, 'relu', relu_slope, x < self.depth - 1, with_isaac)
+                                        for x in range(self.depth)])
         # Upward convolution
-        self.up_conv = nn.ModuleList([nn.Sequential(
-                self.ConvBiasActivation(2*filters[x-1], filters[x-1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac),
-                self.ConvBiasActivation(  filters[x-1], filters[x-1], kernel_size = 3, function = 'relu', alpha = relu_slope, with_isaac = with_isaac))
-                   for x in range(self.depth, 1, -1)])
-
+        self.up_conv = nn.ModuleList([isaac.pytorch.UpVggCropCatBlock(filters[x], filters[x-1], 3, 'relu', relu_slope, with_isaac)
+                                        for x in range(self.depth, 1, -1)])
         # Final layer
-        self.final = self.ConvBiasActivation(filters[1], out_num, kernel_size=1, function = 'sigmoid', alpha = 0, with_isaac = with_isaac)
+        self.final = isaac.pytorch.ConvBiasActivation(filters[1], out_num, kernel_size=1, activation = 'sigmoid', alpha = 0, with_isaac = with_isaac)
 
     def forward(self, x):
         z = [None]*self.depth
         for i in range(self.depth):
-            z[i] = self.down_conv[i](x)
-            x = self.pool[i](z[i]) if i < self.depth - 1 else z[i]
+            z[i], x = self.down_conv[i](x)
         for i in range(self.depth - 1):
-            x = self.upsample[i](x, z[self.depth - 2 - i])
-            x = self.up_conv[i](x)
+            x = self.up_conv[i](x, z[self.depth - 2 - i])
         x = self.final(x)
         torch.cuda.synchronize()
         return x
 
 
+class UNet(UNetBuilder):
+    def __init__(self, out_num=3, filters=[1,24,72,216,648],relu_slope=0.005):
+        super(UNet, self).__init__(out_num, filters, relu_slope, False)
+
+
+class UNetInference(UNetBuilder):
+    def copy(self, x, y):
+        x.weight.data = y.weight.data.permute(1, 2, 3, 4, 0).clone()
+        x.bias.data = y.bias.data
+
+    def __init__(self, base):
+        super(UNetInference, self).__init__(base.out_num, base.filters, base.relu_slope, True)
+
+        # ISAAC only work on GPUs for now
+        self.cuda()
+
+        # Copy weights
+        for (x, y) in zip(self.down_conv, base.down_conv):
+            self.copy(x.conv1, y.conv1[0])
+            self.copy(x.conv2, y.conv2[0])
+        for (x, y) in zip(self.up_conv, base.up_conv):
+            self.copy(x.upsample, y.upsample.conv_bias_relu[0])
+            self.copy(x.conv1, y.conv1[0])
+            self.copy(x.conv2, y.conv2[0])
+        self.copy(self.final, base.final[0])
+
+    def quantize(self, x):
+        history = dict()
+        for module in self.down_conv:
+            module.arm_quantization(history)
+        for module in self.up_conv:
+            module.arm_quantization(history)
+        self.final.arm_quantization(history)
+        self.forward(x)
+
+
 if __name__ == '__main__':
+    torch.manual_seed(0)
     X = Variable(torch.Tensor(1, 1, 31, 204, 204).uniform_(0, 1)).cuda()
 
     # Build models
-    torch.manual_seed(0)
-    unet_ref = UNet3D(with_isaac=False).cuda()
-    torch.manual_seed(0)
-    unet_sc = UNet3D(with_isaac=True).cuda()
+    unet_ref = UNet().cuda()
+    unet_sc = UNetInference(unet_ref).cuda()
+    unet_sc.quantize(X)
 
     # Test correctness
     y_ref = unet_ref(X)

@@ -20,13 +20,17 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
                   size_t pad_d, size_t pad_h, size_t pad_w,
                   size_t stride_d, size_t stride_h, size_t stride_w,
                   THCudaTensor *bias,
-                  const char * activation, float alpha, float scale,
+                  const char * activation, float alpha,
+                  size_t quantized_in, size_t quantized_out, float iscale, float fscale, float oscale,
                   THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   int DIM = THCudaTensor_nDimension(state, inputs) - 2;
 
   // Datatype
-  isaac::DType dtype = isaac::FLOAT_TYPE;
+  isaac::DType in_dtype = quantized_in?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+  isaac::DType out_dtype = quantized_out?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+  size_t vect_c = quantized_in?4:1;
+  size_t vect_k = quantized_out?4:1;
 
   // Inputs
   size_t N = THCudaTensor_size(state, inputs, 0);
@@ -45,7 +49,7 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
   long K = THCudaTensor_size(state, filters, 1 + DIM);
 
   if(Ci != Cf)
-    return 1;
+    return 0;
   size_t C = Ci;
 
   // Output shapes
@@ -56,7 +60,7 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
   size_t Zk = (z)?THCudaTensor_size(state, z, 1):0;
   long output_sizes[5];
   output_sizes[0] = N;
-  output_sizes[1] = K + Zk;
+  output_sizes[1] = K/vect_k + Zk;
   if(DIM > 2) output_sizes[2] = M;
   if(DIM > 1) output_sizes[2 + (DIM > 2)] = P;
   if(DIM > 0) output_sizes[2 + (DIM > 2) + (DIM > 1)] = Q;
@@ -75,15 +79,15 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
     Bias.reset(new isaac::driver::Buffer(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, bias)->data, false));
 
   // Execute
-  isaac::CONV(stream.context().device(), stream, dtype, dtype, N, K, M, P, Q, C, T, R, S, D, H, W,
+  isaac::CONV(stream.context().device(), stream, in_dtype, out_dtype, N, K, M, P, Q, C*vect_c, T, R, S, D, H, W,
               pad_d, pad_h, pad_w,
               stride_d, stride_h, stride_w,
               upsample_d, upsample_h, upsample_w,
               I, F, O,
               Bias.get(),
               sc_activation(activation), alpha,
-              scale,
-              Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
+              iscale, fscale, oscale,
+              Zk*vect_k, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
 
   return 1;
 }
@@ -92,11 +96,13 @@ int isaac_conv_nd(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *out
 int isaac_max_pool_nd(THCudaTensor *inputs, THCudaTensor *outputs,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
+                      size_t quantized,
                       size_t stride_d, size_t stride_h, size_t stride_w){
   int DIM = THCudaTensor_nDimension(state, inputs) - 2;
 
   // Datatype
-  isaac::DType dtype = isaac::FLOAT_TYPE;
+  isaac::DType dtype = quantized?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+  size_t vect_c = quantized?4:1;
 
   // Inputs
   size_t N = THCudaTensor_size(state, inputs, 0);
@@ -126,11 +132,39 @@ int isaac_max_pool_nd(THCudaTensor *inputs, THCudaTensor *outputs,
   isaac::driver::Buffer O(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, outputs)->data, false);
 
   // Execute
-  isaac::POOL(stream.context().device(), stream, dtype, C, M, P, Q, N, T, R, S, D, H, W,
+  isaac::POOL(stream.context().device(), stream, dtype, C*vect_c, M, P, Q, N, T, R, S, D, H, W,
               pad_d, pad_h, pad_w,
               stride_d, stride_h, stride_w,
               I, O);
 
+  return 1;
+}
+
+/* Transform */
+int isaac_pack_nd(THCudaTensor* inputs, THCudaTensor* outputs, float a, float b){
+  size_t DIM = THCudaTensor_nDimension(state, inputs);
+  std::vector<long> sizes(DIM);
+  std::memcpy(sizes.data(), inputs->size, DIM*sizeof(long));
+
+  // Allocate output
+  if(sizes[1] % 4 != 0)
+    return 0;
+  sizes[1] /= 4;
+  THCudaTensor_resizeNd(state, outputs, DIM, sizes.data(), NULL);
+
+  // Wrap handles
+  isaac::driver::Stream stream(THCState_getCurrentStream(state), false);
+  isaac::driver::Buffer I(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, inputs)->data, false);
+  isaac::driver::Buffer O(stream.context(), (CUdeviceptr)THCudaTensor_storage(state, outputs)->data, false);
+  isaac::scalar alpha(a, isaac::FLOAT_TYPE);
+  isaac::scalar beta(b, isaac::FLOAT_TYPE);
+
+  // Execute
+  long D = (DIM > 4)?sizes[2]:1;
+  long H = (DIM > 3)?sizes[2 + (DIM>4)]:1;
+  long W = (DIM > 2)?sizes[2 + (DIM>4) + (DIM>3)]:1;
+  isaac::driver::cudnnTransformTensor(stream, isaac::FLOAT_TYPE, isaac::INT8X4_TYPE, CUDNN_TENSOR_NCHW, CUDNN_TENSOR_NCHW_VECT_C,
+                                      sizes[0], sizes[1]*4, D, H, W, alpha, I, beta, O);
   return 1;
 }
 

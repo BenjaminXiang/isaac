@@ -65,7 +65,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
           driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O,
           driver::Buffer const * bias,
           ActivationType activation, float alpha,
-          float scale,
+          float iscale, float fscale, float oscale,
           param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
           templates::Conv* generator)
 {
@@ -92,7 +92,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
   //Retrieve profile/kernel and execute
   if(generator == NULL)
     generator = inference.get(key_type(stream, in_dtype, out_dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
-  generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream,  I, F, O, bias, alpha, scale, Z);
+  generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream,  I, F, O, bias, alpha, iscale, fscale, oscale, Z);
 }
 
 
@@ -105,8 +105,8 @@ void POOL(driver::Device const & device, driver::Stream & stream,
   typedef std::tuple<driver::Stream, DType, std::vector<param_t>> key_type;
   // Build the generator if necessary
   static cpp::CachedMap<key_type, std::shared_ptr<templates::Pool>> inference([&](key_type const & key){
-    runtime::PoolProfile* profile = (runtime::PoolProfile*)runtime::database.at({device.architecture(), runtime::POOL}).get();
     driver::Stream & stream = (driver::Stream&)std::get<0>(key);
+    runtime::PoolProfile* profile = (runtime::PoolProfile*)runtime::database.at({stream.context().device().architecture(), runtime::POOL}).get();
     DType dtype = std::get<1>(key);
     std::vector<param_t> const & x = std::get<2>(key);
     templates::Pool result = profile->predict(stream, dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16]);
@@ -124,5 +124,7 @@ void POOL(driver::Device const & device, driver::Stream & stream,
     generator = inference.get(key_type(stream, dtype, {C, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w})).get();
   generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream, I, O);
 }
+
+
 
 }

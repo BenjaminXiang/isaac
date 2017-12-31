@@ -1,4 +1,4 @@
-/* Copyright 2015-2017 Philippe Tillet
+﻿/* Copyright 2015-2017 Philippe Tillet
 *
 * Permission is hereby granted, free of charge, to any person obtaining
 * a copy of this software and associated documentation files
@@ -200,7 +200,25 @@ inline void cudnnPool(DType dtype, Stream& stream, int32_t D, int32_t H, int32_t
   dispatch::cudnnPoolingForward(handle, desc, alpha.data(), tI, (void*)pI, beta.data(), tO, (void*)pO);
 }
 
+inline void cudnnTransformTensor(driver::Stream & stream,
+               DType in_dtype, DType out_dtype,
+               cudnnTensorFormat_t in_layout, cudnnTensorFormat_t out_layout,
+               int32_t N, int32_t C, int32_t D, int32_t H, int32_t W,
+               scalar alpha, driver::Buffer const & I, scalar beta, driver::Buffer& O)
+{
+  cudnnHandle_t handle = dispatch::cudnnHandle(stream.context());
+  dispatch::cudnnSetStream(handle, (CUstream)stream);
 
+  cudnnTensorDescriptor_t tO, tI;
+  std::vector<int> shapes = {N, C, D, H, W};
+  dispatch::cudnnCreateTensorDescriptor(&tI);
+  dispatch::cudnnSetTensorNdDescriptorEx(tI, in_layout, cudnnDtype(in_dtype), shapes.size(), shapes.data());
+  dispatch::cudnnCreateTensorDescriptor(&tO);
+  dispatch::cudnnSetTensorNdDescriptorEx(tO, out_layout, cudnnDtype(out_dtype), shapes.size(), shapes.data());
+
+  CUdeviceptr pI = I, pO = O;
+  dispatch::cudnnTransformTensor(handle, alpha.data(), tI, (void*)pI, beta.data(), tO, (void*)pO);
+}
 
 
 }

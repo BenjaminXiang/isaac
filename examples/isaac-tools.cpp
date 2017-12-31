@@ -294,7 +294,7 @@ void benchmark_conv(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::driver::Buffer F(ctx, K*C/vect_c*T*R*S*sc::size_of(in_dtype));
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::CONV(device, stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, I, F, O, NULL, activation, 0., 1., Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, NULL, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::CONV(device, stream, in_dtype, out_dtype, N, K, M, P, Q, C, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, I, F, O, NULL, activation, 0., 1., 1., 1., Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, NULL, (sc::templates::Conv*)generator); }, [&](){ stream.synchronize(); }, device));
 //  if(sc::driver::dispatch::cudnninit())
 //    times.push_back(bench([&](){ sc::driver::cudnnConv(out_dtype, stream, D, H, W, N, K, M, P, Q, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, F, beta, O); }, [&](){ stream.synchronize();  }, device));
   print_results(times, {str(N), str(K), str(M), str(P), str(Q), str(C), str(T), str(R), str(S)}, metric.cmp(), [&](double tsec){ return metric.conv(M, P, Q, K, N, C, T, R, S, tsec);});
