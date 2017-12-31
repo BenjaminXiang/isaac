@@ -55,6 +55,11 @@ Pool::Pool(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, p
     stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
     vec_(vec), bc0_(bc0), cs0_(cs0), u_(1)
 {
+  // Handle packed layouts
+  size_t vect_c = (dtype_==INT8X4_TYPE)?4:1;
+  if(C_ % vect_c != 0)
+    throw std::runtime_error("Number of input channels must be a multiple of VECT_C");
+  C_ /= vect_c;
 
   size_t Nfilt = T_*R_*S_;
   size_t nlut = Nfilt;
@@ -268,6 +273,7 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  .reg .b32 %strideOk, %strideOm, %strideOp, %strideOq, %strideOn;" << std::endl;
     iss << "  .reg .b32 %inci;" << std::endl;
     iss << "  .reg .b64 %pi, %pc;" << std::endl;
+    iss << "  .reg .b32 %acc, %icvt<4>, %ccvt<4>;" << std::endl;
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
       iss << format("  .reg .b64 %pi{0};", i + s) << std::endl;
@@ -296,7 +302,7 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  // Initialize C" << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
-      iss << format("  mov.b32 %rc{0}{1}, 0xff800000;", i, vs[s]) << std::endl;
+      iss << format("  mov.b32 %rc{0}{1}, {2};", i, vs[s], (dtype_==INT8X4_TYPE)?"0x80808080":"0xff800000") << std::endl;
 
     iss << std::endl;
     iss << "  ld.param.u64 %pc, [_pc];" << std::endl;
@@ -368,11 +374,17 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
       if(dtype_ == FLOAT_TYPE)
         iss << format("  max.f32 %rc{0}{1}, %rri{0}{1}, %rc{0}{1};", i, vs[s]) << std::endl;
       if(dtype_ == INT8X4_TYPE){
-        iss << format("  mov.b32 {{%icvt0, %icvt1, %icvt2, %icvt3}} %rri{0}{1};", i, vs[s]) << std::endl;
-        iss << format("  mov.b32 {{%ccvt0, %ccvt1, %ccvt2, %ccvt3}} %rc{0}{1};", i, vs[s]) << std::endl;
-        for(size_t b = 0; b < 4; b++)
-          iss << format("  max.s8 %ccvt{0}, %icvt{0}, %ccvt{0};", b);
-        iss << format("  mov.b32 %rc{0}{1}, {{%ccvt0, %ccvt1, %ccvt2, %ccvt3}};") << std::endl;
+        iss << format("  mov.b32 %acc, 0;") << std::endl;
+        for(size_t b = 0; b < 4; b++){
+          iss << format("  and.b32 %icvt{0}, %rri{1}{2}, {3};", b, i, vs[s], (0xFF) << 8*b) << std::endl;
+          iss << format("  and.b32 %ccvt{0}, %rc{1}{2}, {3};", b, i, vs[s], (0xFF) << 8*b) << std::endl;
+          iss << format("  shl.b32 %icvt{0}, %icvt{0}, {1};", b, (24 - 8*b)) << std::endl;
+          iss << format("  shl.b32 %ccvt{0}, %ccvt{0}, {1};", b, (24 - 8*b)) << std::endl;
+          iss << format("  max.s32 %ccvt{0}, %icvt{0}, %ccvt{0};", b) << std::endl;
+          iss << format("  shr.b32 %ccvt{0}, %ccvt{0}, {1};", b, (24 - 8*b)) << std::endl;
+          iss << format("  or.b32 %acc, %acc, %ccvt{0};", b) << std::endl;
+        }
+        iss << format("  mov.b32 %rc{0}{1}, %acc;", i, vs[s]) << std::endl;
       }
     }
 
