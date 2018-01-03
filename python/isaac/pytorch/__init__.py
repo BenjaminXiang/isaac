@@ -108,6 +108,7 @@ class ConvNd(nn.modules.conv._ConvNd):
             self.quantizer = None
             # Quantize weights
             if self.quantized_in:
+                print(self.scale[1])
                 self.weight.data = PackNd(self.weight.data.permute(*from_chwn_idx(self.dim)), self.scale[1], 0.0)
                 self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim))
 

@@ -216,13 +216,13 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<OUT_DTYPE> output_isaac_c(ground_truth_c);
   // Initialize
   for(size_t i = 0; i < z_c.size(); ++i)
-    z_c[i] = (float)rand()/RAND_MAX*10;
+    z_c[i] = (out_dtype==sc::INT8X4_TYPE)?rand()%20 - 10:(float)rand()/RAND_MAX;
   for(size_t i = 0; i < image_c.size(); ++i)
-    image_c[i] = (float)rand()/RAND_MAX*10;
+    image_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 10:(float)rand()/RAND_MAX;
   for(size_t i = 0; i < filters_c.size(); ++i)
-    filters_c[i] = (float)rand()/RAND_MAX*10;
+    filters_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 10:(float)rand()/RAND_MAX;
   for(size_t i = 0; i < bias_c.size(); ++i)
-    bias_c[i] = has_bias?(float)rand()/RAND_MAX*10:0;
+    bias_c[i] = has_bias?(float)rand()/RAND_MAX:0;
   // Scales
   float iscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(image_c.begin(), image_c.end(), abs_cmp<IN_DTYPE>)):1;
   float fscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(filters_c.begin(), filters_c.end(), abs_cmp<IN_DTYPE>)):1;
@@ -257,8 +257,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   stream.read(output, true, 0, output_isaac_c);
 
   // Check correctness
-//  std::cout << idx(0, 2, 0, 0, 0, N, K/PACK_OUT, M, P, Q) << " " << output_isaac_c[idx(0, 2, 0, 0, 0, N, K/PACK_OUT, M, P, Q)] << " " << ground_truth_c[idx(0, 2, 0, 0, 0, N, K/PACK_OUT, M, P, Q)] << std::endl;
-  if(!is_correct(output_isaac_c, ground_truth_c, max_rounding_error(float(C))))
+  if(!is_correct(output_isaac_c, ground_truth_c, 1e-3))
     exit(EXIT_FAILURE);
 
   std::vector<int> rv = {1, 2, 4};
