@@ -140,7 +140,6 @@ void Pool::check_valid(driver::Device const & device, size_t M, param_t* params,
     for(size_t i = 0; i < x.size(); ++i)
       x[i] = params[m*x.size() + i];
     DType dtype = (DType)(x[0]);
-    param_t Nfilt = x[2];
     param_t vec = x[3], bc0 = x[4], cs0 = x[5];
     //Test
     bool is_valid =  (bc0 <= device.max_block_dim()[0])
