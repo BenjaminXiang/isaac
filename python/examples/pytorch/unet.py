@@ -20,13 +20,13 @@ class UNetBuilder(nn.Module):
         self.out_num = out_num
 
         # Downward convolutions
-        self.down_conv = nn.ModuleList([isaac.pytorch.VggBlock(filters[x], filters[x+1], 3, 'relu', relu_slope, x < self.depth - 1, with_isaac)
+        self.down_conv = nn.ModuleList([isaac.pytorch.VggBlock(filters[x], filters[x+1], (3, 3, 3), (1, 2, 2), 'relu', relu_slope, x < self.depth - 1, with_isaac)
                                         for x in range(self.depth)])
         # Upward convolution
-        self.up_conv = nn.ModuleList([isaac.pytorch.UpVggCropCatBlock(filters[x], filters[x-1], 3, 'relu', relu_slope, with_isaac)
+        self.up_conv = nn.ModuleList([isaac.pytorch.UpVggCropCatBlock(filters[x], filters[x-1], (3, 3, 3), (1, 2, 2), 'relu', relu_slope, with_isaac)
                                         for x in range(self.depth, 1, -1)])
         # Final layer
-        self.final = isaac.pytorch.ConvBiasActivation(filters[1], out_num, kernel_size=1, activation = 'sigmoid', alpha = 0, with_isaac = with_isaac)
+        self.final = isaac.pytorch.ConvBiasActivation(filters[1], out_num, kernel_size=(1, 1, 1), activation = 'sigmoid', alpha = 0, with_isaac = with_isaac)
 
     def forward(self, x):
         z = [None]*self.depth

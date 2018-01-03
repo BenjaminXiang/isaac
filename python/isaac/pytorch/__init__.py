@@ -8,10 +8,15 @@ from .c_lib import *
 import cffi
 
 
+def pad_left(dim, x, value):
+    return (value,)*(dim-len(x)) + x
+
+
 def PackNd(input, alpha, beta):
     output = torch.Tensor().cuda()
     isaac_pack_nd(input, output, alpha, beta)
     return output
+
 
 class ConvNdFunction(Function):
     def __init__(self, activation, alpha, scale, pad = (0, 0, 0), strides = (1, 1, 1), upsample = (1, 1, 1), crop = (0, 0, 0, 0, 0, 0), quantized_in = False, quantized_out = False):
@@ -43,9 +48,9 @@ class ConvNdFunction(Function):
 
 class MaxPoolNdFunction(Function):
     def __init__(self, kernel_size, pad = (0, 0, 0), strides = (1, 1, 1), quantized = False):
-        self.kernel_size = kernel_size
-        self.pad = pad
-        self.strides = strides
+        self.kernel_size = pad_left(3, kernel_size, 1)
+        self.pad = pad_left(3, pad, 1)
+        self.strides = pad_left(3, strides, 1)
         self.ffi = cffi.FFI()
         self.quantized = quantized
 
@@ -76,10 +81,10 @@ class Quantizer:
     def scales(self, x, y):
         result = [1., 1., 1.]
         if self.quantize_in:
-            result[0] = self.history[x]
+            result[0] = self.history[id(x)]
             result[1] = self.scale(self.weights.data)
         if self.quantize_out:
-            result[2] = self.history[y] = self.scale(x.data)
+            result[2] = self.history[id(y)] = self.scale(x.data)
         return result
 
 #############################
@@ -140,6 +145,16 @@ class ConvNdCropCat(ConvNd):
         self.quantize_if_requested(x, y)
         return y
 
+# 1D Conv
+class Conv1d(ConvNd):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1.]):
+        super(Conv1d, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), upsample, groups, bias, activation, alpha, scale)
+
+class Conv1dCropCat(ConvNdCropCat):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1.]):
+        super(Conv1dCropCat, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), upsample, groups, bias, activation, alpha, scale)
+
+
 # 2D Conv
 class Conv2d(ConvNd):
     def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1.]):
@@ -167,7 +182,7 @@ class Conv3dCropCat(ConvNdCropCat):
 class MaxPoolNd(nn.Module):
     def quantize_if_requested(self, x, y):
         if self.quantizer:
-            self.quantizer.history[y] = self.quantizer.history[x]
+            self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
             self.quantizer = None
             self.quantized = True
 
@@ -187,6 +202,14 @@ class MaxPoolNd(nn.Module):
         return y
 
 
+class MaxPool1d(MaxPoolNd):
+    def __init__(self, kernel_size, stride=1):
+        super(MaxPool1d, self).__init__(kernel_size, _single(stride))
+
+class MaxPool2d(MaxPoolNd):
+    def __init__(self, kernel_size, stride=1):
+        super(MaxPool2d, self).__init__(kernel_size, _pair(stride))
+
 class MaxPool3d(MaxPoolNd):
     def __init__(self, kernel_size, stride=1):
         super(MaxPool3d, self).__init__(kernel_size, _triple(stride))
@@ -195,15 +218,14 @@ class MaxPool3d(MaxPoolNd):
 #############################
 ###     Modules           ###
 #############################
-
 def ConvBiasActivation(in_num, out_num, kernel_size, activation, alpha, with_isaac):
+    dim = len(kernel_size)
     if with_isaac:
-        conv = Conv3d(in_num, out_num, kernel_size, activation=activation, alpha=alpha)
-        conv.bias.data.fill_(0.0)
-        return conv
+        Type = [Conv1d, Conv2d, Conv3d][dim - 1]
+        return Type(in_num, out_num, kernel_size, activation=activation, alpha=alpha)
     else:
-        conv = nn.Conv3d(in_num, out_num, kernel_size=kernel_size, padding=0, stride=1, bias=True)
-        conv.bias.data.fill_(0.0)
+        Type = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim - 1]
+        conv = Type(in_num, out_num, kernel_size=kernel_size, padding=0, stride=1, bias=True)
         if activation == 'relu':
             act = nn.LeakyReLU(alpha)
         if activation == 'sigmoid':
@@ -213,10 +235,11 @@ def ConvBiasActivation(in_num, out_num, kernel_size, activation, alpha, with_isa
         return nn.Sequential(conv, act)
 
 def MaxPool(kernel_size, stride, with_isaac):
+    dim = len(kernel_size)
     if with_isaac:
-        return MaxPool3d(kernel_size, stride)
+        return [MaxPool1d, MaxPool2d, MaxPool3d][dim - 1](kernel_size, stride)
     else:
-        return nn.MaxPool3d(kernel_size, stride)
+        return [nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d][dim - 1](kernel_size, stride)
 
 class UpConvCropCat(nn.Module):
     def __init__(self, strides, in_num, out_num):
@@ -236,20 +259,18 @@ class UpConvCropCat(nn.Module):
 
 
 class VggBlock(nn.Module):
-    def __init__(self, in_num, out_num, kernel_size, activation, alpha, pool, with_isaac):
+    def __init__(self, in_num, out_num, kernel_size, window_size, activation, alpha, pool, with_isaac, return_tmp=True):
         super(VggBlock, self).__init__()
         self.conv1 = ConvBiasActivation(in_num, out_num, kernel_size, activation, alpha, with_isaac)
         self.conv2 = ConvBiasActivation(out_num, out_num, kernel_size, activation, alpha, with_isaac)
-        self.pool = MaxPool((1,2,2), (1,2,2), with_isaac = with_isaac) if pool else None
+        self.pool = MaxPool(window_size, window_size, with_isaac = with_isaac) if pool else None
+        self.return_tmp = return_tmp
 
     def forward(self, x):
         z = self.conv1(x)
         z = self.conv2(z)
-        if self.pool:
-            y = self.pool(z)
-            return z, y
-        else:
-            return z, z
+        y = self.pool(z) if self.pool is not None else z
+        return (z, y) if self.return_tmp else y
 
     def arm_quantization(self, history):
         self.conv1.arm_quantization(history)
@@ -262,11 +283,11 @@ class UpVggCropCatBlock(nn.Module):
         if with_isaac:
             return Conv3dCropCat(in_num, out_num, (1,1,1), upsample=strides, activation = 'linear', bias = True)
         else:
-            return UpConvCropCat((1,2,2), in_num, out_num)
+            return UpConvCropCat(strides, in_num, out_num)
 
-    def __init__(self, in_num, out_num, kernel_size, activation, alpha, with_isaac):
+    def __init__(self, in_num, out_num, kernel_size, window_size, activation, alpha, with_isaac):
         super(UpVggCropCatBlock, self).__init__()
-        self.upsample = self.UpConvCropCat((1,2,2), in_num, out_num, with_isaac = with_isaac)
+        self.upsample = self.UpConvCropCat(window_size, in_num, out_num, with_isaac = with_isaac)
         self.conv1 = ConvBiasActivation(2*out_num, out_num, kernel_size, activation, alpha, with_isaac)
         self.conv2 = ConvBiasActivation(out_num, out_num, kernel_size, activation, alpha, with_isaac)
 
