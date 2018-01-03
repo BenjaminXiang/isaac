@@ -103,6 +103,15 @@ def to_chwn_idx(dim):
 def from_chwn_idx(dim):
     return [dim-1] + list(range(0, dim-1))
 
+
+def hex8(x):
+    import numpy as np
+    x = np.int8(x)
+    return hex(x & 0xff)
+
+def hex32(x):
+    return hex(x & 0xffffffff)
+
 class ConvNd(nn.modules.conv._ConvNd):
 
     def quantize_if_requested(self, x, y):
@@ -114,8 +123,9 @@ class ConvNd(nn.modules.conv._ConvNd):
             self.quantizer = None
             # Quantize weights
             if self.quantized_in:
-                self.weight.data = PackNd(self.weight.data.permute(*from_chwn_idx(self.dim)), self.scale[1], 0.0)
-                self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim))
+                tmp = self.weight.data*self.scale[1]
+                self.weight.data = PackNd(self.weight.data.permute(*from_chwn_idx(self.dim)).clone(), self.scale[1], 0.0)
+                self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim)).clone()
 
     def __init__(self, dim, in_channels, out_channels, kernel_size, stride, padding, dilation, upsample, groups, bias, activation, alpha, scale):
         super(ConvNd, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, False, _single(0), groups, bias)
