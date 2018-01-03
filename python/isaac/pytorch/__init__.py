@@ -103,15 +103,6 @@ def to_chwn_idx(dim):
 def from_chwn_idx(dim):
     return [dim-1] + list(range(0, dim-1))
 
-
-def hex8(x):
-    import numpy as np
-    x = np.int8(x)
-    return hex(x & 0xff)
-
-def hex32(x):
-    return hex(x & 0xffffffff)
-
 class ConvNd(nn.modules.conv._ConvNd):
 
     def quantize_if_requested(self, x, y):
@@ -317,3 +308,58 @@ class UpVggCropCatBlock(nn.Module):
         self.upsample.arm_quantization(history)
         self.conv1.arm_quantization(history)
         self.conv2.arm_quantization(history)
+
+class UNet(nn.Module):
+
+    def __init__(self, out_num=3, filters=[1,24,72,216,648], relu_slope=0.005, with_isaac=False):
+        super(UNet, self).__init__()
+        # Attributes
+        self.relu_slope = relu_slope
+        self.filters = filters
+        self.depth = len(filters) - 1
+        self.out_num = out_num
+
+        # Downward convolutions
+        self.down_conv = nn.ModuleList([VggBlock(filters[x], filters[x+1], (3, 3, 3), (1, 2, 2), 'relu', relu_slope, x < self.depth - 1, with_isaac)
+                                        for x in range(self.depth)])
+        # Upward convolution
+        self.up_conv = nn.ModuleList([UpVggCropCatBlock(filters[x], filters[x-1], (3, 3, 3), (1, 2, 2), 'relu', relu_slope, with_isaac)
+                                        for x in range(self.depth, 1, -1)])
+        # Final layer
+        self.final = ConvBiasActivation(filters[1], out_num, kernel_size=(1, 1, 1), activation = 'sigmoid', alpha = 0, with_isaac = with_isaac)
+
+    def forward(self, x):
+        z = [None]*self.depth
+        for i in range(self.depth):
+            z[i], x = self.down_conv[i](x)
+        for i in range(self.depth - 1):
+            x = self.up_conv[i](x, z[self.depth - 2 - i])
+        x = self.final(x)
+        return x
+
+    def fuse(self):
+        result = UNet(self.out_num, self.filters, self.relu_slope, True)
+        result.cuda()
+        # Copy weights
+        def copy(x, y):
+            x.weight.data = y.weight.data.permute(1, 2, 3, 4, 0).clone()
+            x.bias.data = y.bias.data
+        for (x, y) in zip(result.down_conv, self.down_conv):
+            copy(x.conv1, y.conv1[0])
+            copy(x.conv2, y.conv2[0])
+        for (x, y) in zip(result.up_conv, self.up_conv):
+            copy(x.upsample, y.upsample.conv_bias_relu[0])
+            copy(x.conv1, y.conv1[0])
+            copy(x.conv2, y.conv2[0])
+        copy(result.final, self.final[0])
+        return result
+
+    def quantize(self, x):
+        history = dict()
+        for module in self.down_conv:
+            module.arm_quantization(history)
+        for module in self.up_conv:
+            module.arm_quantization(history)
+        self.final.arm_quantization(history)
+        self.forward(x)
+        return self

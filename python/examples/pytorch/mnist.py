@@ -27,38 +27,31 @@ class ConvNet(nn.Module):
         x = self.fc1(x)
         x = self.fc2(x)
         return x, self.loss(x, target)
-        
-    def path(self):
-        return 'network/conv2d.pth'
-
-class ConvNetInference(ConvNet):
-
-    def copy(self, x, y):
-        x.weight.data = y.weight.data.permute(1, 2, 3, 0).clone()
-        x.bias.data = y.bias.data
-
-    def __init__(self, base):
-        super(ConvNetInference, self).__init__(True)
-        self.cuda()
-        
+    
+    def fuse(self):
+        result = ConvNet(with_isaac=True)
+        result.cuda()
+        def copy(x, y):
+            x.weight.data = y.weight.data.permute(1, 2, 3, 0).clone()
+            x.bias.data = y.bias.data
         # Copy weights
-        self.copy(self.vgg1.conv1, base.vgg1.conv1[0])
-        self.copy(self.vgg1.conv2, base.vgg1.conv2[0])
-        self.copy(self.vgg2.conv1, base.vgg2.conv1[0])
-        self.copy(self.vgg2.conv2, base.vgg2.conv2[0])
-        self.fc1.weight.data = base.fc1.weight.data.clone()
-        self.fc1.bias.data = base.fc1.bias.data.clone()
-        self.fc2.weight.data = base.fc2.weight.data.clone()
-        self.fc2.bias.data = base.fc2.bias.data.clone()
-
-
-
+        copy(result.vgg1.conv1, self.vgg1.conv1[0])
+        copy(result.vgg1.conv2, self.vgg1.conv2[0])
+        copy(result.vgg2.conv1, self.vgg2.conv1[0])
+        copy(result.vgg2.conv2, self.vgg2.conv2[0])
+        result.fc1.weight.data = self.fc1.weight.data.clone()
+        result.fc1.bias.data = self.fc1.bias.data.clone()
+        result.fc2.weight.data = self.fc2.weight.data.clone()
+        result.fc2.bias.data = self.fc2.bias.data.clone()
+        return result
+    
     def quantize(self, x, target):
         history = dict()
         self.vgg1.arm_quantization(history)
         self.vgg2.arm_quantization(history)
         self.vgg2.pool.quantizer = None
         self.forward(x, target)
+        return self
 
 
 # Data Set
@@ -75,35 +68,32 @@ ntrain, ntest = len(train_loader), len(test_loader)
         
 # Training
 model = ConvNet().cuda()
-if not os.path.exists(model.path()):
-    optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
-    for epoch in range(5):
-        # Update parameters
-        for batch_idx, (x, target) in enumerate(train_loader):
-            optimizer.zero_grad()
-            x, target = Variable(x.cuda()), Variable(target.cuda())
-            _, train_loss = model(x, target)
-            train_loss.backward()
-            optimizer.step()
-        # Evaluate validation error
-        accuracy, test_loss = 0, 0
-        for batch_idx, (x, target) in enumerate(test_loader):
-            x, target = Variable(x.cuda(), volatile=True), Variable(target.cuda(), volatile=True)
-            score, loss = model(x, target)
-            _, pred_label = torch.max(score.data, 1)
-            accuracy += (pred_label == target.data).sum()
-            test_loss += loss.data[0]
-        accuracy /= ntest*batch_size
-        test_loss /= ntest
-        print('[Epoch {}] Train-loss: {:.4f} | Test-loss: {:.4f} | Accuracy: {:.4f}'.format(epoch, train_loss.data[0], test_loss, accuracy))
-    torch.save(model.state_dict(), model.path())
+optimizer = optim.SGD(model.parameters(), lr=0.01, momentum=0.9)
+for epoch in range(5):
+    # Update parameters
+    for batch_idx, (x, target) in enumerate(train_loader):
+        optimizer.zero_grad()
+        x, target = Variable(x.cuda()), Variable(target.cuda())
+        _, train_loss = model(x, target)
+        train_loss.backward()
+        optimizer.step()
+    # Evaluate validation error
+    accuracy, test_loss = 0, 0
+    for batch_idx, (x, target) in enumerate(test_loader):
+        x, target = Variable(x.cuda(), volatile=True), Variable(target.cuda(), volatile=True)
+        score, loss = model(x, target)
+        _, pred_label = torch.max(score.data, 1)
+        accuracy += (pred_label == target.data).sum()
+        test_loss += loss.data[0]
+    accuracy /= ntest*batch_size
+    test_loss /= ntest
+    print('[Epoch {}] Train-loss: {:.4f} | Test-loss: {:.4f} | Accuracy: {:.4f}'.format(epoch, train_loss.data[0], test_loss, accuracy))
+
+# Quantization
+x, target = next(iter(train_loader))
+model = model.fuse().quantize(Variable(x.cuda()), Variable(target.cuda()))
 
 # Inference
-model.load_state_dict(torch.load(model.path()))
-model = ConvNetInference(model)
-x, target = next(iter(train_loader))
-model.quantize(Variable(x.cuda()), Variable(target.cuda()))
-
 accuracy, test_loss = 0, 0
 for batch_idx, (x, target) in enumerate(test_loader):
     x, target = Variable(x.cuda(), volatile=True), Variable(target.cuda(), volatile=True)
