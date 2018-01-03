@@ -39,7 +39,8 @@ class ConvNetInference(ConvNet):
 
     def __init__(self, base):
         super(ConvNetInference, self).__init__(True)
-
+        self.cuda()
+        
         # Copy weights
         self.copy(self.vgg1.conv1, base.vgg1.conv1[0])
         self.copy(self.vgg1.conv2, base.vgg1.conv2[0])

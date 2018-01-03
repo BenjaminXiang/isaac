@@ -13,7 +13,7 @@ def pad_left(dim, x, value):
 
 
 def PackNd(input, alpha, beta):
-    output = torch.Tensor().cuda()
+    output = torch.Tensor().type(torch.IntTensor).cuda()
     isaac_pack_nd(input, output, alpha, beta)
     return output
 
@@ -30,12 +30,16 @@ class ConvNdFunction(Function):
         self.ffi = cffi.FFI()
         self.quantized_in = quantized_in
         self.quantized_out = quantized_out
+        self.function = {(False, False): isaac_conv_nd_float_float,
+                          (True, False): isaac_conv_nd_int_float,
+                          (False, True): isaac_conv_nd_float_int,
+                          (True, True): isaac_conv_nd_int_int}[quantized_in, quantized_out]
 
     def forward(self, input, weight, bias, z):
         z = z if z.size() else self.ffi.NULL
         bias = bias if bias.size() else self.ffi.NULL
-        output = input.new()
-        isaac_conv_nd(input, weight, output,
+        output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
+        self.function(input, weight, output,
                       self.upsample[0], self.upsample[1], self.upsample[2], # Upsample
                       self.pad[0], self.pad[1], self.pad[2], # Pad
                       self.strides[0], self.strides[1], self.strides[2], # Strides
@@ -53,10 +57,12 @@ class MaxPoolNdFunction(Function):
         self.strides = pad_left(3, strides, 1)
         self.ffi = cffi.FFI()
         self.quantized = quantized
+        self.function = {False: isaac_max_pool_nd_float,
+                                 True: isaac_max_pool_nd_int}[quantized]
 
     def forward(self, input):
         output = input.new()
-        isaac_max_pool_nd(input, output,
+        self.function(input, output,
                       self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
                       self.pad[0], self.pad[1], self.pad[2],
                       self.quantized,
@@ -84,7 +90,7 @@ class Quantizer:
             result[0] = self.history[id(x)]
             result[1] = self.scale(self.weights.data)
         if self.quantize_out:
-            result[2] = self.history[id(y)] = self.scale(x.data)
+            result[2] = self.history[id(y)] = self.scale(y.data)
         return result
 
 #############################
@@ -108,7 +114,6 @@ class ConvNd(nn.modules.conv._ConvNd):
             self.quantizer = None
             # Quantize weights
             if self.quantized_in:
-                print(self.scale[1])
                 self.weight.data = PackNd(self.weight.data.permute(*from_chwn_idx(self.dim)), self.scale[1], 0.0)
                 self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim))
 
