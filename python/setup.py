@@ -56,6 +56,10 @@ def main():
                                with_cuda=True,
                                extra_compile_args= flags)
       ffi = ffi.distutils_extension()
+      try:
+          ffi.include_dirs.remove('/usr/local/cuda/include')
+      except ValueError:
+          pass
       ffi.name = 'pytorch.c_lib._c_lib'
       extensions += [ffi]
     except ImportError:
