@@ -75,7 +75,7 @@ class MaxPoolNdFunction(Function):
 class Quantizer:
 
     def scale(self, x):
-        return 127./torch.max(x)
+        return 127./torch.max(torch.abs(x))
 
     def __init__(self, history, weights):
         self.history = history
@@ -134,8 +134,9 @@ class ConvNd(nn.modules.conv._ConvNd):
         self.quantizer = Quantizer(history, self.weight)
 
     def forward(self, x):
+        bias = self.bias if self.bias is not None else torch.autograd.Variable()
         y = ConvNdFunction(self.activation, self.alpha, self.scale, quantized_in=self.quantized_in, quantized_out = self.quantized_out)\
-                          (x, self.weight, self.bias, torch.autograd.Variable())
+                          (x, self.weight, bias, torch.autograd.Variable())
         self.quantize_if_requested(x, y)
         return y
 

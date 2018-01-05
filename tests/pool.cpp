@@ -142,6 +142,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   sc::POOL(ctx.device(), stream, dtype, K, M, P, Q, N, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, O);
   stream.read(O, true, 0, iO.size()*dtsize, (void*)iO.data());
 
+  std::cout << std::hex << iO[0] << " " << rO[0] << std::endl;
   if(!is_correct(iO, rO, max_rounding_error(DTYPE(T*R*S)))){
     exit(EXIT_FAILURE);
   }
@@ -193,9 +194,9 @@ int main(){
   std::cout << "===============" << std::endl;
   std::cout << "POOL: FPROP" << std::endl;
   std::cout << "-----------" << std::endl;
-  do_test<float>(ctx, "core", 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 1, 1, 1);
-  do_test<float>(ctx, "stride", 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 6, 3, 4);
+//  do_test<float>(ctx, "core", 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 1, 1, 1);
+//  do_test<float>(ctx, "stride", 5, 41, 31, 7, 13, 3, 3, 3, 0, 0, 0, 6, 3, 4);
   do_test<int32_t>(ctx, "int8x4", 5, 40, 31, 7, 13, 3, 3, 3, 0, 0, 0, 1, 1, 1);
-  do_test<int32_t>(ctx, "int8x4 + stride", 5, 40, 31, 7, 13, 3, 3, 3, 0, 0, 0, 6, 3, 4);
+//  do_test<int32_t>(ctx, "int8x4 + stride", 5, 40, 31, 7, 13, 3, 3, 3, 0, 0, 0, 6, 3, 4);
   std::cout << "-----------" << std::endl;
 }

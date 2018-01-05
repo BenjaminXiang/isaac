@@ -92,20 +92,15 @@ if __name__ == '__main__':
     X = Variable(torch.Tensor(1, 1, 31, 204, 204).uniform_(0, 1)).cuda()
 
     # Build models
-    unet_ref = unet3D_m1().cuda()
-    unet_sc = convert(unet_ref).fuse().quantize(X)
+    unet_legacy = unet3D_m1().cuda()
+    unet_legacy.load_state_dict(torch.load('./net_iter_100000_m1.pth')['state_dict'])
+    unet_ref = convert(unet_legacy)
+    #unet_ref = isaac.pytorch.UNet().cuda()
+    #for x in unet_ref.parameters():
+    #    x.data *= 1
+    unet_sc = unet_ref.fuse().quantize(X)
 
-    # Test correctness
     y_ref = unet_ref(X)
     y_sc = unet_sc(X)
     error = torch.norm(y_ref - y_sc)/torch.norm(y_ref)
     print('Error: {}'.format(error.data[0]))
-
-    # Benchmark
-    t_sc = [int(x*1e3) for x in timeit.repeat(lambda: (unet_sc(X), torch.cuda.synchronize()), repeat=1, number=1)]
-    t_ref = [int(x*1e3) for x in timeit.repeat(lambda: (unet_ref(X), torch.cuda.synchronize()), repeat=1, number=1)]
-    print('Time: {}ms (Isaac) ; {}ms (PyTorch)'.format(t_sc[0], t_ref[0]))
-
-
-
-

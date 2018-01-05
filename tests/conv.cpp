@@ -38,7 +38,7 @@ template<class T> struct pack_increment{ enum{ VALUE = 1}; };
 template<> struct pack_increment<int>{ enum{ VALUE = 4}; };
 
 template <class T> T clamp(T x, T lo, T hi){
-  return std::max(lo, std::min(x, hi));
+  return std::max<T>(lo, std::min<T>(x, hi));
 }
 
 template<class DTYPE>
@@ -123,8 +123,10 @@ template<class T> T quantize_pack(float* tmp, float scale);
 template<> float quantize_pack<float>(float* tmp, float scale){ return tmp[0]*scale; }
 template<> int quantize_pack(float* tmp, float scale){
   int res = 0;
-  for(int i = 0; i < 4; i++)
-    res |= int8_t(clamp((int)(tmp[i]*scale), -128, 127)) << (8*i);
+  for(int i = 0; i < 4; i++){
+    int8_t clamped = std::round(clamp(tmp[i]*scale, (float)-128, (float)127));
+    res |= (clamped & 0xFF) << (8*i);
+  }
   return res;
 }
 
@@ -218,23 +220,25 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<OUT_DTYPE> ground_truth_c(N*(K + Zk)*M*P*Q/PACK_OUT);
   std::vector<OUT_DTYPE> output_isaac_c(ground_truth_c);
   // Initialize
+  srand(0);
   for(size_t i = 0; i < z_c.size(); ++i)
-    z_c[i] = (out_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX;
+    z_c[i] = (out_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX - 0.1;
   for(size_t i = 0; i < image_c.size(); ++i)
-    image_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX;
+    image_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX - 0.1;
   for(size_t i = 0; i < filters_c.size(); ++i)
-    filters_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX;
+    filters_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX - 0.1;
   for(size_t i = 0; i < bias_c.size(); ++i)
     bias_c[i] = has_bias?(float)rand()/RAND_MAX:0;
   // Scales
   float iscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(image_c.begin(), image_c.end(), abs_cmp<IN_DTYPE>)):1;
   float fscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(filters_c.begin(), filters_c.end(), abs_cmp<IN_DTYPE>)):1;
-  float oscale = (out_dtype==sc::INT8X4_TYPE)?((float)127 / (C*R*S*T)*5.):1;
+  float oscale = (out_dtype==sc::INT8X4_TYPE)?(float)127 / 1.17:1;
 
   // Ground truth
   upsample(image_c, upsampled_c, N, C/PACK_IN, D, H, W, upsample_d, upsample_h, upsample_w);
   cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c.data(), upsampled_c.data(), filters_c.data(), bias_c.data(), iscale, fscale, oscale);
   crop_merge(conv_c, z_c, ground_truth_c, N, K, M, P, Q, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1); //crop_merge
+
 
   // Isaac
   drv::Buffer image(ctx, image_c.size()*in_dtsize);
@@ -325,7 +329,7 @@ int main(){
   std::cout << "---------------" << std::endl;
   do_test<float, float>(ctx, "core", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
   do_test<float, int>(ctx, "core + quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
-//  do_test<int, int>(ctx, "int8x4", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
+  do_test<int, int>(ctx, "int8x4", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
   do_test<int, float>(ctx, "int8x4 + dequantize", 5, 13, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
   do_test<float, float>(ctx, "upsample", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, false, 0, 0, 0, 0, 0, 0, 0);
   do_test<float, float>(ctx, "crop-merge", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 77, 1, 3, 5, 4, 2, 6);

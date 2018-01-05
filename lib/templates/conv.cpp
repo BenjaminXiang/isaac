@@ -1017,15 +1017,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     }
   }
 
-  if(out_dtype_ == INT8X4_TYPE){
-    iss << std::endl;
-    iss << "  /* Scale */" << std::endl;
-    for(size_t j = 0; j < cs1_ ; j++)
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %oscale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-  }
-
   iss << "  /* Column offsets */" << std::endl;
   iss << format("  mov.s32 %bid0, %ctaid.x;") << std::endl;
   iss << format("  mov.s32 %bid1, %ctaid.y;") << std::endl;
@@ -1055,10 +1046,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   for(size_t j = 0; j < cs1_ ; j++){
     iss << format("  @%predbias{0} ld.global.{1} %rbias{0}, [%pbias{0}];", j, in_word_type) << std::endl;
     iss << format("  @!%predbias{0} mov.{1} %rbias{0}, 0;", j, in_word_type) << std::endl;
-  }
-  if(out_dtype_==INT8X4_TYPE){
-  for(size_t j = 0; j < cs1_ ; j++)
-    iss << format("  mul.f32 %rbias{0}, %oscale, %rbias{0};", j) << std::endl;
   }
   for(size_t j = 0; j < cs1_ ; j++)
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
@@ -1098,8 +1085,14 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << "  /* Saturate */" << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("  cvt.rzi.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+    for(size_t s = 0; s < vec_; ++s){
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %oscale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  min.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, 127.;", i, j, vs[s]) << std::endl;
+      iss << format("  max.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, -128.;", i, j, vs[s]) << std::endl;
+      iss << format("  cvt.rni.sat.s8.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  and.b32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, 0xff;", i, j, vs[s]) << std::endl;
+
+    }
 
     iss << std::endl;
     iss << "  /* Pack */" << std::endl;
@@ -1178,8 +1171,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
     iss << ");" << std::endl;
   }
 
-//  std::cout << iss.str() << std::endl;
-//  std::cout << cs1_ << " " << vec_ << std::endl;
 
   if(Zk_ > 0){
     iss << std::endl;
