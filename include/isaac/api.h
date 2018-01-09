@@ -48,8 +48,8 @@ void CONV(driver::Device const &, driver::Stream & stream,
           param_t D, param_t H, param_t W, param_t pad_d, param_t pad_h, param_t pad_w,
           param_t stride_d, param_t stride_h, param_t stride_w,
           param_t upsample_d, param_t upsample_h, param_t upsample_w,
-          driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O,
-          driver::Buffer const *bias = NULL, ActivationType activation = Linear, float alpha = 0, float iscale = 1, float fscale = 1, float oscale = 1,
+          driver::Buffer const & I, driver::Buffer const & F, driver::Buffer *O, param_t num_outputs,
+          driver::Buffer const *bias = NULL, ActivationType activation = Linear, float alpha = 0, float iscale = 1, float fscale = 1, std::vector<float> const & oscale = {1},
           param_t Zk = 0, param_t crop_z_m0 = 0, param_t crop_z_m1 = 0, param_t crop_z_p0 = 0, param_t crop_z_p1 = 0, param_t crop_z_q0 = 0, param_t crop_z_q1 = 0, driver::Buffer const *Z = NULL,
           templates::Conv* generator = NULL);
 

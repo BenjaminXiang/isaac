@@ -82,7 +82,7 @@ Pool::Pool(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, p
 
 
 // Constant memory
-void Pool::init_constant_memory(std::vector<int32_t> &delta, std::vector<uint32_t> &masks, size_t nlut, int32_t strideIc, int32_t strideIw, int32_t strideIh, int32_t strideId){
+void Pool::init_constant_memory(std::vector<int32_t> &delta, std::vector<uint32_t> &masks, size_t nlut, int32_t, int32_t strideIw, int32_t strideIh, int32_t strideId){
    size_t block = u_;
    size_t Nfilt = T_*R_*S_;
 

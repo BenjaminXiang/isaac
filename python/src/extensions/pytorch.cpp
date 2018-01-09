@@ -27,13 +27,13 @@ inline isaac::ActivationType sc_activation(const std::string & activation){
 
 /* Convolution */
 template<typename IN_TYPE, typename OUT_TYPE>
-int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE *outputs,
+int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, int num_outputs,
                   size_t upsample_d, size_t upsample_h, size_t upsample_w,
                   size_t pad_d, size_t pad_h, size_t pad_w,
                   size_t stride_d, size_t stride_h, size_t stride_w,
                   THCudaTensor *bias,
                   const char * activation, float alpha,
-                  size_t quantized_in, size_t quantized_out, float iscale, float fscale, float oscale,
+                  size_t quantized_in, size_t quantized_out, float iscale, float fscale, float * oscale,
                   OUT_TYPE *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   int DIM = nDimension(state, inputs) - 2;
@@ -76,13 +76,16 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE *outputs,
   if(DIM > 2) output_sizes[2] = M;
   if(DIM > 1) output_sizes[2 + (DIM > 2)] = P;
   if(DIM > 0) output_sizes[2 + (DIM > 2) + (DIM > 1)] = Q;
-  resizeNd(state, outputs, 2 + DIM, output_sizes, NULL);
+  for(int i = 0; i < num_outputs; i++)
+    resizeNd(state, outputs[i], 2 + DIM, output_sizes, NULL);
 
   // Wrap handles
   isaac::driver::Stream stream(THCState_getCurrentStream(state), false);
   isaac::driver::Buffer I(stream.context(), (CUdeviceptr)storage(state, inputs)->data, false);
   isaac::driver::Buffer F(stream.context(), (CUdeviceptr)storage(state, filters)->data, false);
-  isaac::driver::Buffer O(stream.context(), (CUdeviceptr)storage(state, outputs)->data, false);
+  std::vector<isaac::driver::Buffer> O;
+  for(int i = 0; i < num_outputs; i++)
+    O.push_back(isaac::driver::Buffer(stream.context(), (CUdeviceptr)storage(state, outputs[i])->data, false));
   std::unique_ptr<isaac::driver::Buffer> Z;
   if(z)
     Z.reset(new isaac::driver::Buffer(stream.context(), (CUdeviceptr)storage(state, z)->data, false));
@@ -95,10 +98,10 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE *outputs,
               pad_d, pad_h, pad_w,
               stride_d, stride_h, stride_w,
               upsample_d, upsample_h, upsample_w,
-              I, F, O,
+              I, F, O.data(), num_outputs,
               Bias.get(),
               sc_activation(activation), alpha,
-              iscale, fscale, oscale,
+              iscale, fscale, std::vector<float>(oscale, oscale + num_outputs),
               Zk*vect_k, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
 
   return 1;
@@ -156,59 +159,59 @@ extern "C"
 {
 
 
-int isaac_conv_nd_float_float(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor *outputs,
+int isaac_conv_nd_float_float(THCudaTensor *inputs, THCudaTensor *filters, THCudaTensor **outputs, int num_outputs,
                 size_t upsample_d, size_t upsample_h, size_t upsample_w,
                 size_t pad_d, size_t pad_h, size_t pad_w,
                 size_t stride_d, size_t stride_h, size_t stride_w,
                 THCudaTensor *bias,
                 const char * activation,
                 float alpha,
-                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float oscale,
+                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale,
                 THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
-  return isaac_conv_nd_impl(inputs, filters, outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
+  return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
                             quantized_in, quantized_out, iscale, fscale, oscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
-int isaac_conv_nd_int_float(THCudaIntTensor *inputs, THCudaIntTensor *filters, THCudaTensor *outputs,
+int isaac_conv_nd_int_float(THCudaIntTensor *inputs, THCudaIntTensor *filters, THCudaTensor **outputs, int num_outputs,
                 size_t upsample_d, size_t upsample_h, size_t upsample_w,
                 size_t pad_d, size_t pad_h, size_t pad_w,
                 size_t stride_d, size_t stride_h, size_t stride_w,
                 THCudaTensor *bias,
                 const char * activation,
                 float alpha,
-                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float oscale,
+                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale,
                 THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
-  return isaac_conv_nd_impl(inputs, filters, outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
+  return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
                             quantized_in, quantized_out, iscale, fscale, oscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
-int isaac_conv_nd_float_int(THCudaTensor *inputs, THCudaTensor *filters, THCudaIntTensor *outputs,
+int isaac_conv_nd_float_int(THCudaTensor *inputs, THCudaTensor *filters, THCudaIntTensor **outputs, int num_outputs,
                 size_t upsample_d, size_t upsample_h, size_t upsample_w,
                 size_t pad_d, size_t pad_h, size_t pad_w,
                 size_t stride_d, size_t stride_h, size_t stride_w,
                 THCudaTensor *bias,
                 const char * activation,
                 float alpha,
-                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float oscale,
+                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale,
                 THCudaIntTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
-  return isaac_conv_nd_impl(inputs, filters, outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
+  return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
                             quantized_in, quantized_out, iscale, fscale, oscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
-int isaac_conv_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *filters, THCudaIntTensor *outputs,
+int isaac_conv_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *filters, THCudaIntTensor **outputs, int num_outputs,
                 size_t upsample_d, size_t upsample_h, size_t upsample_w,
                 size_t pad_d, size_t pad_h, size_t pad_w,
                 size_t stride_d, size_t stride_h, size_t stride_w,
                 THCudaTensor *bias,
                 const char * activation,
                 float alpha,
-                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float oscale,
+                size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale,
                 THCudaIntTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
-  return isaac_conv_nd_impl(inputs, filters, outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
+  return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
                             quantized_in, quantized_out, iscale, fscale, oscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 

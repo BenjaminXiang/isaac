@@ -80,10 +80,11 @@ inline void upsample(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
 }
 
 template<class DTYPE>
-inline void crop_merge(std::vector<DTYPE> const & x, std::vector<DTYPE> const & y, std::vector<DTYPE>& out,
+inline void crop_merge(std::vector<std::vector<DTYPE>> const & x, std::vector<DTYPE> const & y, std::vector<std::vector<DTYPE>>& out,
                      size_t N, size_t Xc, size_t Xd, size_t Xh, size_t Xw,
                      size_t Yc, size_t crop_y_d0, size_t crop_y_d1, size_t crop_y_h0,size_t crop_y_h1, size_t crop_y_w0, size_t crop_y_w1)
 {
+    size_t num_outputs = x.size();
     static const int PACK_OUT = pack_increment<DTYPE>::VALUE;
     Xc /= PACK_OUT;
     Yc /= PACK_OUT;
@@ -91,6 +92,7 @@ inline void crop_merge(std::vector<DTYPE> const & x, std::vector<DTYPE> const & 
     size_t Yd = Xd + crop_y_d0 + crop_y_d1;
     size_t Yh = Xh + crop_y_h0 + crop_y_h1;
     size_t Yw = Xw + crop_y_w0 + crop_y_w1;
+    for(size_t o = 0; o < num_outputs; o++)
     for(size_t n = 0; n < N; ++n)
     for(size_t xc = 0; xc < C ; ++xc)
     for(size_t xd = 0; xd < Xd; ++xd)
@@ -102,7 +104,7 @@ inline void crop_merge(std::vector<DTYPE> const & x, std::vector<DTYPE> const & 
       size_t idx_x = idx(n, xc, xd, xh, xw, N, Xc, Xd, Xh, Xw);
       size_t idx_y = idx(n, xc - Xc, yd, yh, yw, N, Yc, Yd, Yh, Yw);
       size_t idx_out = idx(n, xc, xd, xh, xw, N, C, Xd, Xh, Xw);
-      out[idx_out] = (xc < Xc)?x[idx_x]:y[idx_y];
+      out[o][idx_out] = (xc < Xc)?x[o][idx_x]:y[idx_y];
     }
 }
 
@@ -124,7 +126,10 @@ template<> float quantize_pack<float>(float* tmp, float scale){ return tmp[0]*sc
 template<> int quantize_pack(float* tmp, float scale){
   int res = 0;
   for(int i = 0; i < 4; i++){
-    int8_t clamped = std::round(clamp(tmp[i]*scale, (float)-128, (float)127));
+    int8_t clamped = std::lrintf(clamp(tmp[i]*scale, (float)-128, (float)127));
+    // GPU will round to nearest even
+    if(std::abs(tmp[i]*scale - clamped - 0.5) < 1e-5)
+        clamped = (clamped + 1)/2*2;
     res |= (clamped & 0xFF) << (8*i);
   }
   return res;
@@ -137,10 +142,11 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
               int32_t pad_d, int32_t pad_h, int32_t pad_w,
               int32_t stride_d, int32_t stride_h, int32_t stride_w,
               int32_t M, int32_t P, int32_t Q,
-              OUT_DTYPE* O, IN_DTYPE* I, IN_DTYPE* F,
+              std::vector<std::vector<OUT_DTYPE>>& O, IN_DTYPE* I, IN_DTYPE* F,
               float* bias,
-              float iscale, float fscale, float oscale)
+              float iscale, float fscale, std::vector<float> const & oscale)
 {
+  size_t num_outputs = O.size();
   static const int PACK_IN = pack_increment<IN_DTYPE>::VALUE;
   static const int PACK_OUT = pack_increment<OUT_DTYPE>::VALUE;
   if(C % PACK_IN != 0) throw std::runtime_error("Number of input channels must be a multiple of 4");
@@ -148,6 +154,7 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
   C /= PACK_IN;
   K /= PACK_OUT;
   float tmp[PACK_OUT];
+  for(size_t o = 0; o < num_outputs; o++)
   for(int32_t m = 0 ; m < M; ++m)
   for(int32_t p = 0 ; p < P; ++p)
   for(int32_t q = 0; q < Q; ++q)
@@ -173,8 +180,8 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
       tmp[kk] += dot(i, f);
     }
     for(int32_t kk = 0; kk < PACK_OUT; ++kk)
-      tmp[kk] += oscale*bias[k*PACK_OUT + kk];
-    O[idx(n, k, m, p, q, N, K, M, P, Q)] = quantize_pack<OUT_DTYPE>(tmp, oscale/(iscale*fscale));
+      tmp[kk] += oscale[o]*bias[k*PACK_OUT + kk];
+    O[o][idx(n, k, m, p, q, N, K, M, P, Q)] = quantize_pack<OUT_DTYPE>(tmp, oscale[o]/(iscale*fscale));
   }
 }
 
@@ -187,10 +194,11 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
                   size_t pad_d, size_t pad_h, size_t pad_w,
                   size_t stride_d, size_t stride_h, size_t stride_w,
                   size_t upsample_d, size_t upsample_h, size_t upsample_w,
-                  bool has_bias,
+                  bool has_bias, size_t num_outputs,
                   size_t Zk, size_t crop_z_m0, size_t crop_z_m1, size_t crop_z_p0, size_t crop_z_p1, size_t crop_z_q0, size_t crop_z_q1)
 {
   srand(0);
+  std::fesetround(FE_TONEAREST);
   sc::DType in_dtype = sc::to_DType<IN_DTYPE>::value;
   sc::DType out_dtype = sc::to_DType<OUT_DTYPE>::value;
 
@@ -215,37 +223,45 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<IN_DTYPE> upsampled_c(N*C*Hup*Wup*Dup/PACK_IN);
   std::vector<IN_DTYPE> filters_c(K*C*R*S*T/PACK_IN);
   std::vector<float> bias_c(K);
-  std::vector<OUT_DTYPE> conv_c(N*K*M*P*Q/PACK_OUT);
   std::vector<OUT_DTYPE> z_c(N*Zk*Zm*Zp*Zq/PACK_OUT);
-  std::vector<OUT_DTYPE> ground_truth_c(N*(K + Zk)*M*P*Q/PACK_OUT);
-  std::vector<OUT_DTYPE> output_isaac_c(ground_truth_c);
+  std::vector<std::vector<OUT_DTYPE>> conv_c, ground_truth_c;
+  for(size_t n = 0; n < num_outputs; n++){
+    conv_c.push_back(std::vector<OUT_DTYPE>(N*K*M*P*Q/PACK_OUT));
+    ground_truth_c.push_back(std::vector<OUT_DTYPE>(N*(K + Zk)*M*P*Q/PACK_OUT));
+  }
+  std::vector<std::vector<OUT_DTYPE>> output_isaac_c(ground_truth_c);
+
   // Initialize
   srand(0);
   for(size_t i = 0; i < z_c.size(); ++i)
-    z_c[i] = (out_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX - 0.1;
+    z_c[i] = (out_dtype==sc::INT8X4_TYPE)?rand():(float)rand()/RAND_MAX - 0.1;
   for(size_t i = 0; i < image_c.size(); ++i)
-    image_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX - 0.1;
+    image_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand():(float)rand()/RAND_MAX - 0.1;
   for(size_t i = 0; i < filters_c.size(); ++i)
-    filters_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand()%20 - 5:(float)rand()/RAND_MAX - 0.1;
+    filters_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand():(float)rand()/RAND_MAX - 0.1;
   for(size_t i = 0; i < bias_c.size(); ++i)
     bias_c[i] = has_bias?(float)rand()/RAND_MAX:0;
+
   // Scales
   float iscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(image_c.begin(), image_c.end(), abs_cmp<IN_DTYPE>)):1;
   float fscale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(filters_c.begin(), filters_c.end(), abs_cmp<IN_DTYPE>)):1;
-  float oscale = (out_dtype==sc::INT8X4_TYPE)?(float)127 / 1.17:1;
-
+  std::vector<float> oscale;
+  for(size_t n = 0; n < num_outputs; n++)
+      oscale.push_back((out_dtype==sc::INT8X4_TYPE)?(float)127/(170 + 100*n):1);
   // Ground truth
   upsample(image_c, upsampled_c, N, C/PACK_IN, D, H, W, upsample_d, upsample_h, upsample_w);
-  cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c.data(), upsampled_c.data(), filters_c.data(), bias_c.data(), iscale, fscale, oscale);
+  cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c, upsampled_c.data(), filters_c.data(), bias_c.data(), iscale, fscale, oscale);
   crop_merge(conv_c, z_c, ground_truth_c, N, K, M, P, Q, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1); //crop_merge
-
 
   // Isaac
   drv::Buffer image(ctx, image_c.size()*in_dtsize);
   drv::Buffer filters(ctx, filters_c.size()*in_dtsize);
-  drv::Buffer output(ctx, ground_truth_c.size()*out_dtsize);
   drv::Buffer z(ctx, std::max<int>(1, z_c.size()*out_dtsize));
   drv::Buffer bias(ctx, std::max<int>(1, bias_c.size()*out_dtsize));
+  std::vector<drv::Buffer> output;
+  for(size_t n = 0; n < num_outputs; n++)
+      output.push_back(drv::Buffer(ctx, ground_truth_c[n].size()*out_dtsize));
+
   drv::Buffer* pz = Zk>0?&z:NULL;
   drv::Buffer* pbias = has_bias?&bias:NULL;
   stream.write(image, false, 0, image_c);
@@ -256,16 +272,19 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
            pad_d, pad_h, pad_w,
            stride_d, stride_h, stride_w,
            upsample_d, upsample_h, upsample_w,
-           image, filters, output,
+           image, filters, output.data(), num_outputs,
            pbias,
            activation, 0,
            iscale, fscale, oscale,
            Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
-  stream.read(output, true, 0, output_isaac_c);
 
   // Check correctness
-  if(!is_correct(output_isaac_c, ground_truth_c, 1e-3))
-    exit(EXIT_FAILURE);
+  for(size_t n = 0; n < num_outputs; n++){
+      stream.read(output[n], true, 0, output_isaac_c[n]);
+      if(!is_correct(output_isaac_c[n], ground_truth_c[n], 1e-3))
+        exit(EXIT_FAILURE);
+  }
+
 
   std::vector<int> rv = {1, 2, 4};
   std::vector<int> rl = {1, 8};
@@ -277,7 +296,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
                                 pad_d, pad_h, pad_w,
                                 stride_d, stride_h, stride_w,
                                 upsample_d, upsample_h, upsample_w,
-                                activation,
+                                activation, num_outputs,
                                 Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
@@ -292,16 +311,16 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{
-      conv.enqueue(kernel, stream, image, filters, output, pbias, 0, iscale, fscale, oscale, pz);
+      conv.enqueue(kernel, stream, image, filters, output.data(), pbias, 0, iscale, fscale, oscale, pz);
     }catch(isaac::driver::exception::cuda::launch_out_of_resources){
       continue;
     }
     //Test
-    stream.read(output, true, 0, output_isaac_c.size()*out_dtsize, (void*)output_isaac_c.data());
-    size_t depth = x[6]*x[7]*x[8];
-    double eps = max_rounding_error(float(C/depth))*depth;
-    if(!is_correct(output_isaac_c, ground_truth_c, eps))
-      exit(EXIT_FAILURE);
+    for(size_t n = 0; n < num_outputs; n++){
+        stream.read(output[n], true, 0, output_isaac_c[n]);
+        if(!is_correct(output_isaac_c[n], ground_truth_c[n], 1e-3))
+          exit(EXIT_FAILURE);
+    }
   }
 }
 
@@ -310,14 +329,14 @@ int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t 
             size_t pad_d, size_t pad_h, size_t pad_w,
             size_t stride_d, size_t stride_h, size_t stride_w,
             size_t upsample_d, size_t upsample_h, size_t upsample_w,
-            bool has_bias,
+            bool has_bias, size_t num_outputs,
             size_t Zk, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   auto params = {N, K, D, H, W, C, T, R, S};
   std::cout << "(";
   std::copy(params.begin(), params.end(), std::ostream_iterator<size_t>(std::cout, ", "));
   std::cout << "\b\b) [" << prefix << "]" << std::endl;
-  do_test_impl<IN_DTYPE, OUT_DTYPE>(ctx, N, K, D, H, W, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, has_bias, Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
+  do_test_impl<IN_DTYPE, OUT_DTYPE>(ctx, N, K, D, H, W, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, has_bias, num_outputs, Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
   return EXIT_SUCCESS;
 }
 
@@ -327,19 +346,20 @@ int main(){
   std::cout << "FPROP:" << std::endl;
   std::cout << "===============" << std::endl;
   std::cout << "---------------" << std::endl;
-  do_test<float, float>(ctx, "core", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, int>(ctx, "core + quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
-  do_test<int, int>(ctx, "int8x4", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
-  do_test<int, float>(ctx, "int8x4 + dequantize", 5, 13, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "upsample", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, false, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "crop-merge", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "pad", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "stride", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, false, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "pad + stride + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "vectorized + bias", 5, 13, 36, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "pad + stride + crop-merge + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "upsample + crop-merge + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "pad + stride + crop-merge + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "upsample + crop-merge + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "core", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, int>(ctx, "core + quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, int>(ctx, "core + dual-quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 2, 0, 0, 0, 0, 0, 0, 0);
+  do_test<int, int>(ctx, "int8x4", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<int, float>(ctx, "int8x4 + dequantize", 5, 13, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "upsample", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, false, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "crop-merge", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "pad", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "stride", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "pad + stride + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "vectorized + bias", 5, 13, 36, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 1, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "pad + stride + crop-merge + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "upsample + crop-merge + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "pad + stride + crop-merge + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "upsample + crop-merge + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 1, 77, 1, 3, 5, 4, 2, 6);
   std::cout << "---------------" << std::endl;
 }

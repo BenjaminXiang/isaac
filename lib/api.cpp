@@ -62,10 +62,10 @@ void CONV(driver::Device const &, driver::Stream & stream,
           param_t pad_d, param_t pad_h, param_t pad_w,
           param_t stride_d, param_t stride_h, param_t stride_w,
           param_t upsample_d, param_t upsample_h, param_t upsample_w,
-          driver::Buffer const & I, driver::Buffer const & F, driver::Buffer& O,
+          driver::Buffer const & I, driver::Buffer const & F, driver::Buffer* O, param_t num_outputs,
           driver::Buffer const * bias,
           ActivationType activation, float alpha,
-          float iscale, float fscale, float oscale,
+          float iscale, float fscale, std::vector<float> const & oscale,
           param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
           templates::Conv* generator)
 {
@@ -77,7 +77,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
     DType out_dtype = std::get<2>(key);
     std::vector<param_t> const & x = std::get<3>(key);
     runtime::ConvProfile* profile = (runtime::ConvProfile*)runtime::database.at({stream.context().device().architecture(), runtime::CONV}).get();
-    templates::Conv result = profile->predict(stream, in_dtype, out_dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], x[23], x[24], x[25], x[26], x[27], x[28]);
+    templates::Conv result = profile->predict(stream, in_dtype, out_dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], x[23], x[24], x[25], x[26], x[27], x[28], x[29]);
     return std::make_shared<templates::Conv>(result);
   });
 
@@ -91,12 +91,12 @@ void CONV(driver::Device const &, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
-    generator = inference.get(key_type(stream, in_dtype, out_dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
+    generator = inference.get(key_type(stream, in_dtype, out_dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, num_outputs, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
   generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream,  I, F, O, bias, alpha, iscale, fscale, oscale, Z);
 }
 
 
-void POOL(driver::Device const & device, driver::Stream & stream,
+void POOL(driver::Device const &, driver::Stream & stream,
           DType dtype, param_t C, param_t M, param_t P, param_t Q, param_t N, param_t T, param_t R, param_t S,
           param_t D, param_t H, param_t W, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
           driver::Buffer const & I, driver::Buffer& O,

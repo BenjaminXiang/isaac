@@ -7,6 +7,7 @@ import copy
 import isaac.pytorch
 from time import time
 import timeit
+import h5py
 
 
 def mergeCrop(x1, x2):
@@ -88,19 +89,36 @@ def convert(legacy):
 
 
 if __name__ == '__main__':
-    torch.manual_seed(0)
-    X = Variable(torch.Tensor(1, 1, 31, 204, 204).uniform_(0, 1)).cuda()
+    # Load data
+    T = np.array(h5py.File('./im_uint8_half.h5','r')['main']).astype(np.float32)/255
+    I, J, K = 31, 204, 204
 
     # Build models
     unet_legacy = unet3D_m1().cuda()
     unet_legacy.load_state_dict(torch.load('./net_iter_100000_m1.pth')['state_dict'])
     unet_ref = convert(unet_legacy)
-    #unet_ref = isaac.pytorch.UNet().cuda()
-    #for x in unet_ref.parameters():
-    #    x.data *= 1
+
+    # Quantize
+    X = T[:I, :J, :K].reshape(1, 1, I, J, K)
+    X = Variable(torch.from_numpy(X)).cuda()
     unet_sc = unet_ref.fuse().quantize(X)
 
-    y_ref = unet_ref(X)
-    y_sc = unet_sc(X)
-    error = torch.norm(y_ref - y_sc)/torch.norm(y_ref)
-    print('Error: {}'.format(error.data[0]))
+    # Evaluate errors
+    N = 10
+    errors = np.zeros(N)
+    np.random.seed(0)
+    i_range = np.random.randint(I, T.shape[0] - I, N)
+    j_range = np.random.randint(J, T.shape[1] - J, N)
+    k_range = np.random.randint(K, T.shape[2] - K, N)
+    for n, (i, j, k) in enumerate(zip(i_range, j_range, k_range)):
+        X = T[i : i+I, j : j+J, k : k+K].reshape(1, 1, I, J, K)
+        X = Variable(torch.from_numpy(X)).cuda()
+        y_ref = unet_ref(X)
+        y_sc = unet_sc(X)
+        errors[n] = torch.norm(y_ref - y_sc).data[0]/torch.norm(y_ref).data[0]
+    print('Error: {:.4f} [+- {:.4f}]'.format(np.mean(errors), np.std(errors)))
+
+    # Benchmark
+    t_sc = [int(x*1e3) for x in timeit.repeat(lambda: (unet_sc(X), torch.cuda.synchronize()), repeat=1, number=1)]
+    t_ref = [int(x*1e3) for x in timeit.repeat(lambda: (unet_ref(X), torch.cuda.synchronize()), repeat=1, number=1)]
+    print('Time: {}ms (Isaac) ; {}ms (PyTorch)'.format(t_sc[0], t_ref[0]))
