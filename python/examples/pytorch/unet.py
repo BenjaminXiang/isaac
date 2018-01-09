@@ -104,3 +104,8 @@ if __name__ == '__main__':
     y_sc = unet_sc(X)
     error = torch.norm(y_ref - y_sc)/torch.norm(y_ref)
     print('Error: {}'.format(error.data[0]))
+
+    # Benchmark
+    t_sc = [int(x*1e3) for x in timeit.repeat(lambda: (unet_sc(X), torch.cuda.synchronize()), repeat=1, number=1)]
+    t_ref = [int(x*1e3) for x in timeit.repeat(lambda: (unet_ref(X), torch.cuda.synchronize()), repeat=1, number=1)]
+    print('Time: {}ms (Isaac) ; {}ms (PyTorch)'.format(t_sc[0], t_ref[0]))

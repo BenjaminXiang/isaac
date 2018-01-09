@@ -186,7 +186,7 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType in_dtype, DTy
                                     param_t pad_d, param_t pad_h, param_t pad_w,
                                     param_t stride_d, param_t stride_h, param_t stride_w,
                                     param_t upsample_d, param_t upsample_h, param_t upsample_w,
-                                    ActivationType activation,
+                                    ActivationType activation, size_t num_outputs,
                                     param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1,
                                     size_t num_re_evaluate)
 {
@@ -202,19 +202,19 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType in_dtype, DTy
     I.reset(new driver::Buffer(stream.context(), C*D*H*W*N*size_of(in_dtype)/PACK_IN));
     F.reset(new driver::Buffer(stream.context(), C*K*T*R*S*size_of(in_dtype)/PACK_IN));
     benchmark = [&](std::vector<param_t> const& x){
-      templates::Conv generator(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation,
+      templates::Conv generator(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, 1,
                                 0, 0, 0, 0, 0, 0, 0,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
       std::string src = generator.dump(device, "kernel");
       driver::Module module(stream.context(), src);
       driver::Kernel kernel(module, "kernel");
-      return bench([&](){ generator.enqueue(kernel, stream, *I, *F, *O); }, [&](){ stream.synchronize(); }, device);
+      return bench([&](){ generator.enqueue(kernel, stream, *I, *F, O.get()); }, [&](){ stream.synchronize(); }, device);
     };
   }
   std::vector<param_t> shapes{out_dtype, N*M*P*Q, K, C/PACK_IN, T*R*S};
   std::vector<param_t> x = Profile::predict(device, shapes, templates::Conv::check_valid, benchmark, num_re_evaluate);
   return templates::Conv(in_dtype, out_dtype, C, D, H, W, N, K, M, P, Q, T, R, S,
-                         pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
+                         pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, num_outputs, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
 }
 
