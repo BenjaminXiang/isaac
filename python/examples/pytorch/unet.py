@@ -100,8 +100,8 @@ if __name__ == '__main__':
 
     # Quantize
     X = T[:I, :J, :K].reshape(1, 1, I, J, K)
-    X = Variable(torch.from_numpy(X)).cuda()
-    unet_sc = unet_ref.fuse().quantize(X)
+    X = Variable(torch.from_numpy(X), volatile=True).cuda()
+    unet_sc = unet_ref.fuse().quantize(X, approximate=True)
 
     # Evaluate errors
     N = 10

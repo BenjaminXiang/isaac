@@ -23,7 +23,7 @@ class ConvNdFunction(Function):
     def __init__(self, activation, alpha, scale, pad = (0, 0, 0), strides = (1, 1, 1), upsample = (1, 1, 1), crop = (0, 0, 0, 0, 0, 0), quantized_in = False, quantized_out = False):
         self.activation = activation.encode('utf-8')
         self.alpha = float(alpha)
-        self.scale = (scale[0], scale[1], tuple(map(float, scale[2])))
+        self.scale = (scale[0], scale[1], tuple(map(float, scale[2])), scale[3])
         self.num_outputs = len(self.scale[2])
         self.pad = pad
         self.strides = strides
@@ -50,7 +50,7 @@ class ConvNdFunction(Function):
                       self.strides[0], self.strides[1], self.strides[2], # Strides
                       bias, # Bias
                       self.activation, self.alpha, # Activation
-                      self.quantized_in, self.quantized_out, self.scale[0], self.scale[1], p_scales, # Quantization
+                      self.quantized_in, self.quantized_out, self.scale[0], self.scale[1], p_scales, self.scale[3], # Quantization
                       z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5]# Crop-cat
                       )
         if self.num_outputs == 1:
@@ -83,28 +83,48 @@ class Quantizer:
 
     def scale(self, x):
         sorted = x.abs().view(-1).sort(dim = 0, descending = True)[0]
-        idxs = [int(rho * len(sorted)) for rho in np.arange(0, 1e-5, 1e-6)]
-        scales = [127. / sorted[idx] for idx in idxs]
-        clip = lambda x, scale: torch.round(torch.clamp(x * scale, -128, 127)) / scale
-        loss = [torch.norm(x - clip(x, scale)) for scale in scales]
-        return scales[np.argmin(loss)]
+        return 127. / sorted[0]
+        #idxs = [int(rho * len(sorted)) for rho in np.arange(0, 1e-5, 1e-6)]
+        #scales = [127. / sorted[idx] for idx in idxs]
+        #clip = lambda x, scale: torch.round(torch.clamp(x * scale, -128, 127)) / scale
+        #loss = [torch.norm(x - clip(x, scale)) for scale in scales]
+        #return scales[np.argmin(loss)]
 
-    def __init__(self, history, module_of, weights):
-        self.history = history
-        self.module_of = module_of
-        if weights is not None:
-            self.weights = weights
-            self.quantize_in = weights.data.size()[0] % 4 == 0
-            self.quantize_out = weights.data.size()[-1] % 4 == 0
+    def __init__(self, approximate):
+        self.history = dict()
+        self.module_of = dict()
+        self.approximate = approximate
 
-    def scales(self, x, y):
-        result = [1., 1., [1.]]
-        if self.quantize_in:
-            result[0] = self.history[id(x)]
-            result[1] = self.scale(self.weights.data)
-        if self.quantize_out:
-            result[2][0] = self.history[id(y)] = self.scale(y.data)
-        return result
+    def quantize(self, weight, x, y, z):
+        # Update scales
+        scale = [1., 1., [1.], 1.]
+        quantized_in, quantized_out = False, False
+
+        if weight.data.size()[0] % 4 == 0:
+            quantized_in = True
+            scale[0] = self.history[id(x)]
+            scale[1] = self.scale(weight.data)
+        if weight.data.size()[-1] % 4 == 0:
+            quantized_out = True
+            scale[2][0] = self.history[id(y)] = self.scale(y.data)
+
+        # Quantize weights
+        dim = len(weight.size())
+        if quantized_in:
+            tmp = weight.data*scale[1]
+            weight.data = PackNd(weight.data.permute(*from_chwn_idx(dim)).clone(), scale[1], 0.0)
+            weight.data = weight.data.permute(*to_chwn_idx(dim)).clone()
+
+        # Handle skip connections
+        if z is not None:
+            if self.approximate:
+                scale[3] = scale[2][0] / self.history[id(z)]
+            else:
+                self.module_of[id(z)].scale[2].append(scale[2][0])
+
+        # Quantization done
+        return scale, weight, quantized_in, quantized_out
+
 
 #############################
 ###      Convolutions     ###
@@ -118,26 +138,7 @@ def from_chwn_idx(dim):
 
 class ConvNd(nn.modules.conv._ConvNd):
 
-    def quantize_if_requested(self, x, y, z = None):
-        if self.quantizer:
-            # Update properties
-            self.scale = self.quantizer.scales(x, y)
-            self.quantized_in = self.quantizer.quantize_in
-            self.quantized_out = self.quantizer.quantize_out
-            # Quantize weights
-            if self.quantized_in:
-                tmp = self.weight.data*self.scale[1]
-                self.weight.data = PackNd(self.weight.data.permute(*from_chwn_idx(self.dim)).clone(), self.scale[1], 0.0)
-                self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim)).clone()
-            # Handle skip connections
-            if z is not None:
-                self.quantizer.module_of[id(z)].scale[2].append(self.scale[2][0])
-            # Quantization done
-            self.quantizer.module_of.update({id(y): self})
-            self.quantizer = None
-
-
-    def __init__(self, dim, in_channels, out_channels, kernel_size, stride, padding, dilation, upsample, groups, bias, activation, alpha, scale):
+    def __init__(self, dim, in_channels, out_channels, kernel_size, stride, padding, dilation, upsample, groups, bias, activation, alpha, scale, residual):
         super(ConvNd, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, False, _single(0), groups, bias)
         self.activation = activation
         self.alpha = alpha
@@ -148,70 +149,51 @@ class ConvNd(nn.modules.conv._ConvNd):
         self.quantized_out = False
         self.dim = dim
         self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim))
+        self.skip = 'cat'
 
-    def set_quantizer(self, history, module_of):
-        self.quantizer = Quantizer(history, module_of, self.weight)
+    def set_quantizer(self, quantizer):
+        self.quantizer = quantizer
 
-    def forward(self, x):
+    def forward(self, x, z = None):
+        # Cropping
+        if z is None:
+            crop = [1, 1, 1, 1, 1, 1]
+        else:
+            offset = [(z.size()[i]-x.size()[i]*self.upsample[i - 2])//2 for i in range(2,z.dim())]
+            crop = (offset[0], offset[0], offset[1], offset[1], offset[2], offset[2])
+        # Bias
         bias = self.bias if self.bias is not None else torch.autograd.Variable()
-        y = ConvNdFunction(self.activation, self.alpha, self.scale, quantized_in=self.quantized_in, quantized_out = self.quantized_out)\
-                          (x, self.weight, bias, torch.autograd.Variable())
-        self.quantize_if_requested(x, y)
+        # Computation
+        y = ConvNdFunction(self.activation, self.alpha, self.scale, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out)\
+                          (x, self.weight, bias, torch.autograd.Variable() if z is None else z)
+        # Quantize if requested
+        if self.quantizer:
+            self.scale, self.weight, self.quantized_in, self.quantized_out = self.quantizer.quantize(self.weight, x, y, z)
+            self.quantizer.module_of.update({id(y): self})
+            self.quantizer = None
         return y
 
-class ConvNdCropCat(ConvNd):
-    def __init__(self, *args):
-        super(ConvNdCropCat, self).__init__(*args)
-
-    def forward(self, x, z):
-        offset = [(z.size()[i]-x.size()[i]*self.upsample[i - 2])//2 for i in range(2,z.dim())]
-        bias = self.bias if self.bias is not None else torch.autograd.Variable()
-        crop = (offset[0], offset[0], offset[1], offset[1], offset[2], offset[2])
-        y = ConvNdFunction(self.activation, self.alpha, self.scale, upsample=self.upsample, crop=crop, quantized_in = self.quantized_in, quantized_out = self.quantized_out)\
-                          (x, self.weight, bias, z)
-        self.quantize_if_requested(x, y, z)
-        return y
 
 # 1D Conv
 class Conv1d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.]]):
-        super(Conv1d, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), upsample, groups, bias, activation, alpha, scale)
-
-class Conv1dCropCat(ConvNdCropCat):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.]]):
-        super(Conv1dCropCat, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), upsample, groups, bias, activation, alpha, scale)
-
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.], 1.], residual = None):
+        super(Conv1d, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), _single(upsample), groups, bias, activation, alpha, scale, residual)
 
 # 2D Conv
 class Conv2d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.]]):
-        super(Conv2d, self).__init__(4, in_channels, out_channels, _pair(kernel_size), _pair(stride), _pair(padding), _pair(dilation), upsample, groups, bias, activation, alpha, scale)
-
-class Conv2dCropCat(ConvNdCropCat):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.]]):
-        super(Conv2dCropCat, self).__init__(4, in_channels, out_channels, _pair(kernel_size), _pair(stride), _pair(padding), _pair(dilation), upsample, groups, bias, activation, alpha, scale)
-
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.], 1.], residual = None):
+        super(Conv2d, self).__init__(4, in_channels, out_channels, _pair(kernel_size), _pair(stride), _pair(padding), _pair(dilation), _pair(upsample), groups, bias, activation, alpha, scale, residual)
 
 # 3D Conv
 class Conv3d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.]]):
-        super(Conv3d, self).__init__(5, in_channels, out_channels, _triple(kernel_size), _triple(stride), _triple(padding), _triple(dilation), upsample, groups, bias, activation, alpha, scale)
-
-class Conv3dCropCat(ConvNdCropCat):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.]]):
-        super(Conv3dCropCat, self).__init__(5, in_channels, out_channels, _triple(kernel_size), _triple(stride), _triple(padding), _triple(dilation), upsample, groups, bias, activation, alpha, scale)
-
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.], 1.], residual = None):
+        super(Conv3d, self).__init__(5, in_channels, out_channels, _triple(kernel_size), _triple(stride), _triple(padding), _triple(dilation), _triple(upsample), groups, bias, activation, alpha, scale, residual)
 
 #############################
 ###      Pooling          ###
 #############################
 
 class MaxPoolNd(nn.Module):
-    def quantize_if_requested(self, x, y):
-        if self.quantizer:
-            self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
-            self.quantizer = None
-            self.quantized = True
 
     def __init__(self, kernel_size, stride):
         super(MaxPoolNd, self).__init__()
@@ -220,12 +202,17 @@ class MaxPoolNd(nn.Module):
         self.kernel_size = kernel_size
         self.stride = stride
 
-    def set_quantizer(self, history, module_of):
-        self.quantizer = Quantizer(history, module_of, None)
+    def set_quantizer(self, quantizer):
+        self.quantizer = quantizer
 
     def forward(self, x):
+        # Computations
         y = MaxPoolNdFunction(self.kernel_size, strides=self.stride, quantized=self.quantized)(x)
-        self.quantize_if_requested(x, y)
+        # Quantization if requested
+        if self.quantizer:
+            self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
+            self.quantizer = None
+            self.quantized = True
         return y
 
 
@@ -273,6 +260,7 @@ class UpConvCropCat(nn.Module):
         super(UpConvCropCat, self).__init__()
         self.upsample = nn.ConvTranspose3d(in_num, in_num, strides, strides, groups=in_num, bias=False)
         self.upsample.weight.data.fill_(1.0)
+        self.upsample.weight.requires_grad = False
         self.conv_bias_relu = ConvBiasActivation(in_num, out_num, (1, 1, 1), activation = 'linear', alpha = 1, with_isaac = False)
 
 
@@ -304,7 +292,7 @@ class VggBlock(nn.Module):
 class UpVggCropCatBlock(nn.Module):
     def UpConvCropCat(self, strides, in_num, out_num, with_isaac):
         if with_isaac:
-            return Conv3dCropCat(in_num, out_num, (1,1,1), upsample=strides, activation = 'linear', bias = True)
+            return Conv3d(in_num, out_num, (1,1,1), upsample=strides, activation = 'linear', bias = True, residual = 'cat')
         else:
             return UpConvCropCat(strides, in_num, out_num)
 
@@ -319,6 +307,7 @@ class UpVggCropCatBlock(nn.Module):
         x = self.conv1(x)
         x = self.conv2(x)
         return x
+
 
 class UNet(nn.Module):
 
@@ -349,27 +338,19 @@ class UNet(nn.Module):
         return x
 
     def fuse(self):
-        result = UNet(self.out_num, self.filters, self.relu_slope, True)
-        result.cuda()
-        # Copy weights
-        def copy(x, y):
-            x.weight.data = y.weight.data.permute(1, 2, 3, 4, 0).clone()
-            x.bias.data = y.bias.data
-        for (x, y) in zip(result.down_conv, self.down_conv):
-            copy(x.conv1, y.conv1[0])
-            copy(x.conv2, y.conv2[0])
-        for (x, y) in zip(result.up_conv, self.up_conv):
-            copy(x.upsample, y.upsample.conv_bias_relu[0])
-            copy(x.conv1, y.conv1[0])
-            copy(x.conv2, y.conv2[0])
-        copy(result.final, self.final[0])
+        result = UNet(self.out_num, self.filters, self.relu_slope, True).cuda()
+        parameters = [x for x in self.parameters() if x.requires_grad]
+        for x, y in zip(result.parameters(), parameters):
+            if(len(x.data.size()) > 1):
+                x.data = y.data.permute(1, 2, 3, 4, 0).clone()
+            else:
+                x.data = y.data
         return result
 
-    def quantize(self, x):
-        history = dict()
-        module_of = dict()
+    def quantize(self, x, approximate = True):
+        quantizer = Quantizer(approximate)
         for module in self.modules():
             if hasattr(module, 'set_quantizer'):
-                module.set_quantizer(history, module_of)
+                module.set_quantizer(quantizer)
         self.forward(x)
         return self

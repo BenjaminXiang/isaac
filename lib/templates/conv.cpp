@@ -545,34 +545,62 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "}" << std::endl;
 
   iss << std::endl;
-  iss << ".func crop_merge_col(.reg .b64 %pz, .reg .b64 %po, .reg .b32 %Cs0";
+  iss << ".func crop_merge_col(.reg .b64 %pz, .reg .b64 %pc, .reg .b32 %Cs0";
   for(size_t i = 0; i < cs0_; i++) iss << format(", .reg .b32 %offc{}", i);
   for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc) iss << format(", .reg .b32 %diffz{}", i);
   for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", .reg .b32 %diffc{}", i);
+  iss << ",  .reg .b32 %z_rescale" << std::endl;
   iss << "){" << std::endl;
   iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
-  for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    iss << format("  .reg {}.{} %rz{};", vv, in_word_type, i);
+  for(size_t i = 0 ; i < cs0_ ; i+=vec_){
+    iss << format("  .reg {}.{} %rz_{};", vv, in_word_type, i);
+    iss << format("  .reg {0}.{1} %rz0_{2}, %rz1_{2}, %rz2_{2}, %rz3_{2};", vv, in_word_type, i);
+  }
 
-  iss << "  // Predicates" << std::endl;
+
+  iss << "// Predicates" << std::endl;
   for(size_t i = 0 ; i < cs0_ ; i++)
     iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
 
   for(size_t i = 0 ; i < cs0_ ; i+=vec_){
     // Load
     for(size_t s = 0; s < vec_; s+=z_inc){
-      iss << format("  @%predc{} ld.global{}.{} %rz{}{}, [%pz];", i + s, z_aligned?vv:"", in_word_type, i, z_aligned?"":vs[s]) << std::endl;
+      iss << format("  @%predc{} ld.global{}.{} %rz_{}{}, [%pz];", i + s, z_aligned?vv:"", in_word_type, i, z_aligned?"":vs[s]) << std::endl;
       if(i + s < cs0_ - z_inc)
         iss << format("  mad.wide.s32 %pz, %diffz{0}, 1, %pz;", i + s) << std::endl;
     }
+
+    // Unpack - Scale - Repack
+    if(out_dtype_==INT8X4_TYPE){
+      iss << std::endl;
+      for(size_t s = 0; s < vec_; ++s){
+        for(size_t jj = 0; jj < 4; ++jj){
+          iss << format("  shr.b32 %rz{0}_{1}{2}, %rz_{1}{2}, {3};", jj, i, vs[s], 8*jj) << std::endl;
+          iss << format("  and.b32 %rz{0}_{1}{2}, %rz{0}_{1}{2}, 0xff;", jj, i, vs[s]) << std::endl;
+          iss << format("  cvt.rn.f32.s8 %rz{0}_{1}{2}, %rz{0}_{1}{2};", jj, i, vs[s]) << std::endl;
+          iss << format("  mul.f32 %rz{0}_{1}{2}, %rz{0}_{1}{2}, %z_rescale;", jj, i, vs[s]) << std::endl;
+          iss << format("  cvt.rni.sat.s8.f32 %rz{0}_{1}{2}, %rz{0}_{1}{2};", jj, i, vs[s]) << std::endl;
+          iss << format("  and.b32 %rz{0}_{1}{2}, %rz{0}_{1}{2}, 0xff;", jj, i, vs[s]) << std::endl;
+          iss << format("  shl.b32 %rz{0}_{1}{2}, %rz{0}_{1}{2}, {3};", jj, i, vs[s], 8*jj) << std::endl;
+        }
+        iss << std::endl;
+        iss << format("  mov.b32 %rz_{}{}, 0x0;", i, vs[s]) << std::endl;
+        for(size_t jj = 0; jj < 4; ++jj){
+          iss << format("  or.b32 %rz_{1}{2},  %rz_{1}{2}, %rz{0}_{1}{2};", jj, i, vs[s], 8*jj) << std::endl;
+        }
+      }
+    }
+
     // Concatenate store
     for(size_t s = 0; s < vec_; s+=c_inc){
-      iss << format("  @%predc{} st.global{}.{} [%po], %rz{}{};", i + s, c_aligned?vv:"", in_word_type, i, c_aligned?"":vs[s]) << std::endl;
+      iss << format("  @%predc{} st.global{}.{} [%pc], %rz_{}{};", i + s, c_aligned?vv:"", in_word_type, i, c_aligned?"":vs[s]) << std::endl;
       if(i + s < cs0_ - c_inc)
-        iss << format("  mad.wide.s32 %po, %diffc{0}, 1, %po;", i + s) << std::endl;
+        iss << format("  mad.wide.s32 %pc, %diffc{0}, 1, %pc;", i + s) << std::endl;
     }
   }
   iss << "}" << std::endl;
+
+
 
   if(activation_ == Sigmoid){
     iss << ".func (.reg .f32 %retval) exp(.param .f32 _x){" << std::endl;
@@ -620,9 +648,10 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _alpha," << std::endl
       << "            .param .b32 _Zk, .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b32 _strideZn, .param .b32 _strideZk, .param .b32 _strideZm, .param .b32 _strideZp, .param .b32 _strideZq, .param .b64 _pz," << std::endl
       << "            .param .b32 _bound," << std::endl
-      << "            .param .b32 _iscale, .param .b32 _fscale";
+      << "            .param .b32 _iscale, .param .b32 _fscale,";
   for(size_t i = 0; i < num_outputs_; i++)
-      iss << format(", .param .b32 _oscale{}", i) << std::flush;
+      iss << format("  .param .b32 _oscale{},", i) << std::flush;
+  iss << "            .param .b32 _z_rescale" << std::endl;
   iss << ")" << std::endl;
   iss << "{" << std::endl;
 
@@ -732,12 +761,12 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .{} %rbias<{}>;", in_word_type, cs1_) << std::endl;
   iss << format("  .reg .pred %has_bias;") << std::endl;
   // Quantization
-  iss << ".reg .b32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
-  iss << ".reg .pred %predc;" << std::endl;
+  iss << "  .reg .b32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
+  iss << "  .reg .pred %predc;" << std::endl;
   iss << "  .reg .b32 %scale, %iscale, %fscale;" << std::endl;
   for(size_t i = 0; i < num_outputs_; i++)
     iss << format("  .reg .b32 %oscale{};", i) << std::endl;
-
+  iss << "  .reg .b32 %z_rescale;" << std::endl;
 
   iss << std::endl;
   iss << "  /* Initialize O */" << std::endl;
@@ -800,6 +829,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  ld.param.b32 %fscale, [_fscale];" << std::endl;
   for(size_t n = 0; n < num_outputs_; n++)
     iss << format("  ld.param.b32 %oscale{0}, [_oscale{0}];", n) << std::endl;
+  iss << "  ld.param.b32 %z_rescale, [_z_rescale];" << std::endl;
 
   iss << "  // Shared memory" << std::endl;
   iss << format("  .shared .align 16 .b8 _shared[{}];", size_shmem) << std::endl;
@@ -1251,7 +1281,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
           for(size_t i = 0 ; i < cs0_ ; i+=vec_) for(size_t s = 0; s < vec_; s++) iss << format(", %offc0_{}", i*bc0_ + s);
           for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc) iss << format(", %diffz{}", i);
           for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc) iss << format(", %diffc{}", i);
-          iss << format(");") << std::endl;
+          iss << format(", %z_rescale);") << std::endl;
           iss << format("  mad.wide.s32 %pz{0}, %inc, %strideZk, %pz{0};", j) << std::endl;
           iss << format("  mad.wide.s32 %po{0}, %inc, %strideOk, %po{0};", j) << std::endl;
         }
@@ -1270,7 +1300,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    driver::Buffer const & I, driver::Buffer const & F, driver::Buffer* O, // Conv
                    driver::Buffer const *bias, // Bias
                    float alpha, // Relu
-                   float iscale, float fscale, std::vector<float> oscale, // Quantization
+                   float iscale, float fscale, std::vector<float> oscale, float z_rescale,// Quantization
                    driver::Buffer const *Z // Merge
                    ){
   // Data-type size
@@ -1400,6 +1430,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   kernel.setArg(idx++, fscale);
   for(size_t i = 0; i < num_outputs_; i++)
     kernel.setArg(idx++, oscale[i]);
+  kernel.setArg(idx++, z_rescale);
   if(gridz_>1)
     for(size_t i = 0; i < num_outputs_; i++)
       O[i].set_zero(stream, N_*(Kout_ + Zk_)*M_*P_*Q_*size_of(out_dtype_));
