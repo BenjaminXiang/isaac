@@ -108,17 +108,17 @@ inline void crop_merge(std::vector<std::vector<DTYPE>> const & x, std::vector<DT
     }
 }
 
-float dot(float x, float y)
-{ return x*y; }
+inline float dot(float x, float y, float z)
+{ return std::fma(x, y, z); }
 
-inline int dot(int x, int y){
+inline int dot(int x, int y, int z){
   int res = 0;
   for(int i = 0; i < 4; i++){
     int32_t a = ((x >> (8*i)) & 0x000000FF);
     int32_t b = ((y >> (8*i)) & 0x000000FF);
     res +=  (*(int8_t*)(&a)) * (*(int8_t*)(&b));
   }
-  return res;
+  return res + z;
 }
 
 template<class T> T quantize_pack(float* tmp, float scale);
@@ -127,9 +127,6 @@ template<> int quantize_pack(float* tmp, float scale){
   int res = 0;
   for(int i = 0; i < 4; i++){
     int8_t clamped = std::lrintf(clamp(tmp[i]*scale, (float)-128, (float)127));
-    // GPU will round to nearest even
-    if(std::abs(tmp[i]*scale - clamped - 0.5) < 1e-5)
-        clamped = (clamped + 1)/2*2;
     res |= (clamped & 0xFF) << (8*i);
   }
   return res;
@@ -153,6 +150,7 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
   if(K % PACK_OUT != 0) throw std::runtime_error("Number of output channels must be a multiple of 4");
   C /= PACK_IN;
   K /= PACK_OUT;
+  IN_DTYPE accs[PACK_OUT];
   float tmp[PACK_OUT];
   for(size_t o = 0; o < num_outputs; o++)
   for(int32_t m = 0 ; m < M; ++m)
@@ -162,7 +160,7 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
   for(int32_t k = 0; k < K ; ++k)
   {
     for(int32_t i = 0; i < PACK_OUT; ++i)
-      tmp[i] = 0;
+      accs[i] = 0;
     int32_t mm = m*stride_d - pad_d;
     int32_t pp = p*stride_h - pad_h;
     int32_t qq = q*stride_w - pad_w;
@@ -177,11 +175,14 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
       bool in_bounds = (d >= 0 && h >= 0 && w >= 0 && d < D && h < H && w < W);
       IN_DTYPE i = in_bounds?I[idx(n, c, d, h, w, N, C, D, H, W)]:0;
       IN_DTYPE f = F[idx(c, t, r, s, k*PACK_OUT + kk, C, T, R, S, K*PACK_OUT)];
-      tmp[kk] += dot(i, f);
+      accs[kk] = dot(i, f, accs[kk]);
     }
-    for(int32_t kk = 0; kk < PACK_OUT; ++kk)
-      tmp[kk] += oscale[o]*bias[k*PACK_OUT + kk];
-    O[o][idx(n, k, m, p, q, N, K, M, P, Q)] = quantize_pack<OUT_DTYPE>(tmp, oscale[o]/(iscale*fscale));
+    for(int32_t kk = 0; kk < PACK_OUT; ++kk){
+      tmp[kk] = accs[kk];
+      tmp[kk] /= (iscale*fscale);
+      tmp[kk] += bias[k*PACK_OUT + kk];
+    }
+    O[o][idx(n, k, m, p, q, N, K, M, P, Q)] = quantize_pack<OUT_DTYPE>(tmp, oscale[o]);
   }
 }
 
@@ -275,7 +276,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
            image, filters, output.data(), num_outputs,
            pbias,
            activation, 0,
-           iscale, fscale, oscale,
+           iscale, fscale, oscale, 1,
            Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
 
   // Check correctness
@@ -311,7 +312,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
     drv::Kernel kernel(program, "fprop");
     //Launch
     try{
-      conv.enqueue(kernel, stream, image, filters, output.data(), pbias, 0, iscale, fscale, oscale, pz);
+      conv.enqueue(kernel, stream, image, filters, output.data(), pbias, 0, iscale, fscale, oscale, 1, pz);
     }catch(isaac::driver::exception::cuda::launch_out_of_resources){
       continue;
     }
