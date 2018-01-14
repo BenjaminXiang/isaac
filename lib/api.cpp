@@ -65,7 +65,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
           driver::Buffer const & I, driver::Buffer const & F, driver::Buffer* O, param_t num_outputs,
           driver::Buffer const * bias,
           ActivationType activation, float alpha,
-          float iscale, float fscale, std::vector<float> const & oscale, float z_rescale,
+          float iscale, float fscale, std::vector<float> const & oscale, float z_scale,
           param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
           templates::Conv* generator)
 {
@@ -92,7 +92,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
   //Retrieve profile/kernel and execute
   if(generator == NULL)
     generator = inference.get(key_type(stream, in_dtype, out_dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, num_outputs, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
-  generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream,  I, F, O, bias, alpha, iscale, fscale, oscale, z_rescale, Z);
+  generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream,  I, F, O, bias, alpha, iscale, fscale, oscale, z_scale, Z);
 }
 
 

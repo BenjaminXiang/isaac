@@ -118,9 +118,10 @@ class Quantizer:
         # Handle skip connections
         if z is not None:
             if self.approximate:
-                scale[3] = scale[2][0] / self.history[id(z)]
+                scale[3] = self.history[id(z)]
             else:
                 self.module_of[id(z)].scale[2].append(scale[2][0])
+                scale[3] = scale[2][0]
 
         # Quantization done
         return scale, weight, quantized_in, quantized_out
