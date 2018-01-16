@@ -4,7 +4,7 @@ import torch.nn.functional as F
 from torch.autograd import Variable
 import numpy as np
 import copy
-import isaac.pytorch
+import isaac.pytorch.models
 from time import time
 import timeit
 import h5py
@@ -64,14 +64,14 @@ class unet3D_m1(nn.Module): # deployed model-1
        return F.sigmoid(self.final(x))
 
 def convert(legacy):
-    result = isaac.pytorch.UNet().cuda()
+    result = isaac.pytorch.models.UNet().cuda()
 
     # Reorder indices because new state dict has upsample-upconv interleaved
     depth = legacy.depth
     ndown = 4*(depth + 1)
     reorder = list(range(ndown))
     for i in range(depth):
-        upsamples = list(range(ndown + i*3, ndown + i*3 + 3))
+        upsamples = list(range(ndown + i*3 + 1, ndown + i*3 + 3))
         upconvs = list(range(ndown + depth*3 + i*4, ndown + depth*3 + i*4 + 4))
         reorder +=  upsamples + upconvs
     reorder += [ndown + 7*depth, ndown + 7*depth + 1]
@@ -81,8 +81,14 @@ def convert(legacy):
     result_keys = list(result.state_dict().keys())
     legacy_dict = legacy.state_dict()
     result_dict = result.state_dict()
+
     for i, j in enumerate(reorder):
-        result_dict[result_keys[i]] = legacy_dict[legacy_keys[j]].clone()
+        weights = legacy_dict[legacy_keys[j]].clone()
+        # Transpose weights if necessary
+        if(len(weights.size()) > 1):
+            weights = weights.permute(1, 2, 3, 4, 0)
+        # Copy weights
+        result_dict[result_keys[i]] = weights
     result.load_state_dict(result_dict)
 
     return result
@@ -94,14 +100,13 @@ if __name__ == '__main__':
     I, J, K = 31, 204, 204
 
     # Build models
-    unet_legacy = unet3D_m1().cuda()
-    unet_legacy.load_state_dict(torch.load('./net_iter_100000_m1.pth')['state_dict'])
-    unet_ref = convert(unet_legacy)
+    unet_ref = unet3D_m1().cuda()
+    unet_ref.load_state_dict(torch.load('./net_iter_100000_m1.pth')['state_dict'])
 
     # Quantize
     X = T[:I, :J, :K].reshape(1, 1, I, J, K)
     X = Variable(torch.from_numpy(X), volatile=True).cuda()
-    unet_sc = unet_ref.fuse().quantize(X, approximate=True)
+    unet_sc = convert(unet_ref).quantize(X, approximate=True)
 
     # Evaluate errors
     N = 10

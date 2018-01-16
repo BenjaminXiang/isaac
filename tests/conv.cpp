@@ -42,29 +42,6 @@ template <class T> T clamp(T x, T lo, T hi){
 }
 
 template<class DTYPE>
-inline void to_cudnn(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
-                     size_t C, size_t D, size_t H, size_t W, size_t N){
-  for(size_t c = 0; c < C ; ++c)
-  for(size_t d = 0; d < D; ++d)
-  for(size_t h = 0; h < H; ++h)
-  for(size_t w = 0; w < W; ++w)
-  for(size_t n = 0; n < N; ++n)
-    out[idx(n, c, d, h, w, N, C, D, H, W)] = in[idx(c, d, h, w, n, C, D, H, W, N)];
-}
-
-template<class DTYPE>
-inline void from_cudnn(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
-                     size_t N, size_t K, size_t M, size_t P, size_t Q){
-    for(size_t k = 0; k < K ; ++k)
-    for(size_t m = 0; m < M; ++m)
-    for(size_t p = 0; p < P; ++p)
-    for(size_t q = 0; q < Q; ++q)
-    for(size_t n = 0; n < N; ++n)
-      out[idx(k, m, p, q, n, K, M, P, Q, N)] = in[idx(n, k, m, p, q, N, K, M, P, Q)];
-}
-
-
-template<class DTYPE>
 inline void upsample(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
                      size_t N, size_t C, size_t D, size_t H, size_t W, size_t upsample_d, size_t upsample_h, size_t upsample_w){
     for(size_t n = 0; n < N; ++n)
@@ -80,64 +57,37 @@ inline void upsample(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
 }
 
 
-template<class T> T quantize_pack(float* tmp, float scale);
+template<class T> T pack(float* tmp, float scale);
 
-template<> float quantize_pack<float>(float* tmp, float scale)
+template<> float pack<float>(float* tmp, float scale)
 { return tmp[0]*scale; }
 
-template<> int quantize_pack(float* tmp, float scale)
+template<> int pack(float* tmp, float scale)
 {
   int res = 0;
   for(int i = 0; i < 4; i++){
-    int8_t clamped = std::lrintf(clamp(tmp[i]*scale, (float)-128, (float)127));
+    int8_t clamped = std::round(clamp(tmp[i]*scale, (float)-128, (float)127));
     res |= (clamped & 0xFF) << (8*i);
   }
   return res;
 }
 
 
-float scale(float value, float scale)
-{ return value*scale; }
-
-int scale(int value, float scale)
+float* unpack(float* ptr, float value, float scale)
 {
-  float tmp[4];
+  *ptr = value/scale;
+  return ptr;
+}
+
+float* unpack(float* ptr, int value, float scale)
+{
   for(int i = 0; i < 4; i++){
     int shifted = (value >> (8*i) & 0xff);
-    tmp[i] = (float)(*(int8_t*)(&shifted));
+    ptr[i] = ((float)(*(int8_t*)(&shifted)))/scale;
   }
-  return quantize_pack<int>(tmp, scale);
+  return ptr;
 }
 
-
-template<class DTYPE>
-inline void crop_merge(std::vector<std::vector<DTYPE>> const & x, std::vector<float> x_scale, std::vector<DTYPE> const & y, float y_scale, std::vector<std::vector<DTYPE>>& out,
-                     size_t N, size_t Xc, size_t Xd, size_t Xh, size_t Xw,
-                     size_t Yc, size_t crop_y_d0, size_t crop_y_d1, size_t crop_y_h0,size_t crop_y_h1, size_t crop_y_w0, size_t crop_y_w1)
-{
-    size_t num_outputs = x.size();
-    static const int PACK_OUT = pack_increment<DTYPE>::VALUE;
-    Xc /= PACK_OUT;
-    Yc /= PACK_OUT;
-    size_t C = Xc + Yc;
-    size_t Yd = Xd + crop_y_d0 + crop_y_d1;
-    size_t Yh = Xh + crop_y_h0 + crop_y_h1;
-    size_t Yw = Xw + crop_y_w0 + crop_y_w1;
-    for(size_t o = 0; o < num_outputs; o++)
-    for(size_t n = 0; n < N; ++n)
-    for(size_t xc = 0; xc < C ; ++xc)
-    for(size_t xd = 0; xd < Xd; ++xd)
-    for(size_t xh = 0; xh < Xh; ++xh)
-    for(size_t xw = 0; xw < Xw; ++xw){
-      size_t yd = xd + crop_y_d0;
-      size_t yh = xh + crop_y_h0;
-      size_t yw = xw + crop_y_w0;
-      size_t idx_x = idx(n, xc, xd, xh, xw, N, Xc, Xd, Xh, Xw);
-      size_t idx_y = idx(n, xc - Xc, yd, yh, yw, N, Yc, Yd, Yh, Yw);
-      size_t idx_out = idx(n, xc, xd, xh, xw, N, C, Xd, Xh, Xw);
-      out[o][idx_out] = (xc < Xc)?x[o][idx_x]:scale(y[idx_y], x_scale[o] / y_scale);
-    }
-}
 
 inline float dot(float x, float y, float z)
 { return std::fma(x, y, z); }
@@ -162,23 +112,32 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
               int32_t M, int32_t P, int32_t Q,
               std::vector<std::vector<OUT_DTYPE>>& O, IN_DTYPE* I, IN_DTYPE* F,
               float* bias,
-              float iscale, float fscale, std::vector<float> const & oscale)
+              float iscale, float fscale, std::vector<float> const & oscale,
+              OUT_DTYPE* Z, float zscale, int32_t Zk, int32_t crop_z_m0, int32_t crop_z_m1, int32_t crop_z_p0,int32_t crop_z_p1, int32_t crop_z_q0, int32_t crop_z_q1,
+              sc::ResidualType residual_type)
 {
   size_t num_outputs = O.size();
   static const int PACK_IN = pack_increment<IN_DTYPE>::VALUE;
   static const int PACK_OUT = pack_increment<OUT_DTYPE>::VALUE;
   if(C % PACK_IN != 0) throw std::runtime_error("Number of input channels must be a multiple of 4");
   if(K % PACK_OUT != 0) throw std::runtime_error("Number of output channels must be a multiple of 4");
+  if(Zk % PACK_OUT != 0) throw std::runtime_error("Number of residual channels must be a multiple of 4");
   C /= PACK_IN;
   K /= PACK_OUT;
+  Zk /= PACK_OUT;
+  int32_t Kout = (residual_type == sc::CatResidual)? K + Zk : K;
   IN_DTYPE accs[PACK_OUT];
   float tmp[PACK_OUT];
+  float tmp_z[PACK_OUT];
+  int32_t Zm = M + crop_z_m0 + crop_z_m1;
+  int32_t Zp = P + crop_z_p0 + crop_z_p1;
+  int32_t Zq = Q + crop_z_q0 + crop_z_q1;
   for(size_t o = 0; o < num_outputs; o++)
   for(int32_t m = 0 ; m < M; ++m)
   for(int32_t p = 0 ; p < P; ++p)
   for(int32_t q = 0; q < Q; ++q)
   for(int32_t n = 0; n < N; ++n)
-  for(int32_t k = 0; k < K ; ++k)
+  for(int32_t k = 0; k < Kout ; ++k)
   {
     for(int32_t i = 0; i < PACK_OUT; ++i)
       accs[i] = 0;
@@ -203,7 +162,28 @@ void cpp_conv_nchw(int32_t C, int32_t N, int32_t K,
       tmp[kk] /= (iscale*fscale);
       tmp[kk] += bias[k*PACK_OUT + kk];
     }
-    O[o][idx(n, k, m, p, q, N, K, M, P, Q)] = quantize_pack<OUT_DTYPE>(tmp, oscale[o]);
+    OUT_DTYPE result = pack<OUT_DTYPE>(tmp, oscale[o]);;
+    if(residual_type == sc::NoResidual)
+      O[o][idx(n, k, m, p, q, N, K, M, P, Q)] = result;
+    else{
+      size_t zm = m + crop_z_m0;
+      size_t zp = p + crop_z_p0;
+      size_t zq = q + crop_z_q0;
+      size_t idx_z = idx(n, k - K, zm, zp, zq, N, Zk, Zm, Zp, Zq);
+      if(residual_type == sc::CatResidual){
+        OUT_DTYPE result = pack<OUT_DTYPE>(tmp, oscale[o]);;
+        OUT_DTYPE residual = pack<OUT_DTYPE>(unpack(tmp, Z[idx_z], zscale), oscale[o]);
+        O[o][idx(n, k, m, p, q, N, Kout, M, P, Q)] = (k < K)?result:residual;
+      }
+      if(residual_type == sc::AddResidual){
+        size_t idx_z = idx(n, k, zm, zp, zq, N, Zk, Zm, Zp, Zq);
+        unpack(tmp_z, Z[idx_z], zscale);
+        for(int32_t i = 0; i < PACK_OUT; ++i)
+          tmp[i] += tmp_z[i];
+        O[o][idx(n, k, m, p, q, N, K, M, P, Q)] = pack<OUT_DTYPE>(tmp, oscale[o]);
+      }
+    }
+
   }
 }
 
@@ -217,10 +197,9 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
                   size_t stride_d, size_t stride_h, size_t stride_w,
                   size_t upsample_d, size_t upsample_h, size_t upsample_w,
                   bool has_bias, size_t num_outputs,
-                  size_t Zk, size_t crop_z_m0, size_t crop_z_m1, size_t crop_z_p0, size_t crop_z_p1, size_t crop_z_q0, size_t crop_z_q1)
+                  sc::ResidualType residual, size_t Zk, size_t crop_z_m0, size_t crop_z_m1, size_t crop_z_p0, size_t crop_z_p1, size_t crop_z_q0, size_t crop_z_q1)
 {
   srand(0);
-  std::fesetround(FE_TONEAREST);
   sc::DType in_dtype = sc::to_DType<IN_DTYPE>::value;
   sc::DType out_dtype = sc::to_DType<OUT_DTYPE>::value;
 
@@ -237,6 +216,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   sc::param_t Zm = M + crop_z_m0 + crop_z_m1;
   sc::param_t Zp = P + crop_z_p0 + crop_z_p1;
   sc::param_t Zq = Q + crop_z_q0 + crop_z_q1;
+  sc::param_t Kout = (residual == sc::CatResidual)? K + Zk : K;
 
   // CPU buffers
   size_t PACK_IN = pack_increment<IN_DTYPE>::VALUE;
@@ -246,17 +226,13 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
   std::vector<IN_DTYPE> filters_c(K*C*R*S*T/PACK_IN);
   std::vector<float> bias_c(K);
   std::vector<OUT_DTYPE> z_c(N*Zk*Zm*Zp*Zq/PACK_OUT);
-  std::vector<std::vector<OUT_DTYPE>> conv_c, ground_truth_c;
-  for(size_t n = 0; n < num_outputs; n++){
-    conv_c.push_back(std::vector<OUT_DTYPE>(N*K*M*P*Q/PACK_OUT));
-    ground_truth_c.push_back(std::vector<OUT_DTYPE>(N*(K + Zk)*M*P*Q/PACK_OUT));
-  }
+  std::vector<std::vector<OUT_DTYPE>> ground_truth_c(num_outputs, std::vector<OUT_DTYPE>(N*Kout*M*P*Q/PACK_OUT));
   std::vector<std::vector<OUT_DTYPE>> output_isaac_c(ground_truth_c);
 
   // Initialize
   srand(0);
   for(size_t i = 0; i < z_c.size(); ++i)
-    z_c[i] = (out_dtype==sc::INT8X4_TYPE)?rand():(float)rand()/RAND_MAX - 0.1;
+    z_c[i] = (out_dtype==sc::INT8X4_TYPE)?rand():50*(float)rand()/RAND_MAX;
   for(size_t i = 0; i < image_c.size(); ++i)
     image_c[i] = (in_dtype==sc::INT8X4_TYPE)?rand():(float)rand()/RAND_MAX - 0.1;
   for(size_t i = 0; i < filters_c.size(); ++i)
@@ -274,8 +250,10 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
 
   // Ground truth
   upsample(image_c, upsampled_c, N, C/PACK_IN, D, H, W, upsample_d, upsample_h, upsample_w);
-  cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q, conv_c, upsampled_c.data(), filters_c.data(), bias_c.data(), i_scale, f_scale, o_scale);
-  crop_merge(conv_c, o_scale, z_c, z_scale, ground_truth_c, N, K, M, P, Q, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1); //crop_merge
+  cpp_conv_nchw(C, N, K, Dup, Hup, Wup, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, M, P, Q,
+                ground_truth_c, upsampled_c.data(), filters_c.data(), bias_c.data(), i_scale, f_scale, o_scale,
+                z_c.data(), z_scale, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
+                residual);
 
   // Isaac
   drv::Buffer image(ctx, image_c.size()*in_dtsize);
@@ -300,7 +278,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
            pbias,
            activation, 0,
            i_scale, f_scale, o_scale, z_scale,
-           Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
+           residual, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1, pz);
 
   // Check correctness
   for(size_t n = 0; n < num_outputs; n++){
@@ -321,7 +299,7 @@ void do_test_impl(sc::driver::Context const & ctx, size_t N, size_t K, size_t D,
                                 stride_d, stride_h, stride_w,
                                 upsample_d, upsample_h, upsample_w,
                                 activation, num_outputs,
-                                Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
+                                residual, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     //Compile
     std::string src;
@@ -354,13 +332,13 @@ int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t 
             size_t stride_d, size_t stride_h, size_t stride_w,
             size_t upsample_d, size_t upsample_h, size_t upsample_w,
             bool has_bias, size_t num_outputs,
-            size_t Zk, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
+            sc::ResidualType residual, size_t Zk, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   auto params = {N, K, D, H, W, C, T, R, S};
   std::cout << "(";
   std::copy(params.begin(), params.end(), std::ostream_iterator<size_t>(std::cout, ", "));
   std::cout << "\b\b) [" << prefix << "]" << std::endl;
-  do_test_impl<IN_DTYPE, OUT_DTYPE>(ctx, N, K, D, H, W, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, has_bias, num_outputs, Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
+  do_test_impl<IN_DTYPE, OUT_DTYPE>(ctx, N, K, D, H, W, C, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, has_bias, num_outputs, residual, Zk, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
   return EXIT_SUCCESS;
 }
 
@@ -370,21 +348,23 @@ int main(){
   std::cout << "FPROP:" << std::endl;
   std::cout << "===============" << std::endl;
   std::cout << "---------------" << std::endl;
-  do_test<float, float>(ctx, "core", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, int>(ctx, "core + quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, int>(ctx, "core + dual-quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 2, 0, 0, 0, 0, 0, 0, 0);
-  do_test<int, int>(ctx, "int8x4", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<int, float>(ctx, "int8x4 + dequantize", 5, 13, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "upsample", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, false, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "crop-merge", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<int, int>(ctx, "int8x4 + crop-merge", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, 60, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "pad", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "stride", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, false, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "pad + stride + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "vectorized + bias", 5, 13, 36, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 1, 0, 0, 0, 0, 0, 0, 0);
-  do_test<float, float>(ctx, "pad + stride + crop-merge + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "upsample + crop-merge + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "pad + stride + crop-merge + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, 77, 1, 3, 5, 4, 2, 6);
-  do_test<float, float>(ctx, "upsample + crop-merge + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 0, 0, 0, 1, 1, 1, 3, 2, 4, true, 1, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "core", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, int>(ctx, "core + quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, int>(ctx, "core + dual-quantize", 5, 16, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 2, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<int, int>(ctx, "int8x4", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<int, float>(ctx, "int8x4 + dequantize", 5, 13, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "upsample", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 3, 2, 4, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "residual-cat", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::CatResidual, 77, 1, 3, 5, 4, 2, 6);
+  do_test<int, int>(ctx, "int8x4 + residual-cat", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::CatResidual, 60, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "residual-add", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::AddResidual, 77, 1, 3, 5, 4, 2, 6);
+  do_test<int, int>(ctx, "int8x4 + residual-add", 5, 16, 19, 11, 15, 20, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::AddResidual, 60, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "pad", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 1, 1, 1, 1, 1, 1, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "stride", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 6, 3, 4, 1, 1, 1, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "pad + stride + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "vectorized + bias", 5, 13, 36, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);
+  do_test<float, float>(ctx, "pad + stride + residual-cat + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, sc::CatResidual, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "upsample + residual-cat + bias", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, true, 1, sc::CatResidual, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "pad + stride + residual-cat + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 5, 1, 2, 6, 3, 4, 1, 1, 1, true, 1, sc::CatResidual, 77, 1, 3, 5, 4, 2, 6);
+  do_test<float, float>(ctx, "upsample + residual-cat + bias", 5, 13, 19, 11, 15, 17, 1, 1, 1, 0, 0, 0, 1, 1, 1, 3, 2, 4, true, 1, sc::CatResidual, 77, 1, 3, 5, 4, 2, 6);
   std::cout << "---------------" << std::endl;
 }

@@ -78,7 +78,7 @@ void export_templates(py::module&& m){
                   param_t, param_t, param_t, //stride
                   param_t, param_t, param_t, //upsample
                   sc::ActivationType, param_t, //number of outputs
-                  param_t, param_t, param_t, param_t, param_t, param_t, param_t, //Crop-merge
+                  sc::ResidualType, param_t, param_t, param_t, param_t, param_t, param_t, param_t, // Residual
                   param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t, param_t // Tuning
                  >())
       .def("dump", &tpt::Conv::dump)

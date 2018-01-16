@@ -66,7 +66,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
           driver::Buffer const * bias,
           ActivationType activation, float alpha,
           float iscale, float fscale, std::vector<float> const & oscale, float z_scale,
-          param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
+          ResidualType residual, param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
           templates::Conv* generator)
 {
   typedef std::tuple<driver::Stream, DType, DType, std::vector<param_t>> key_type;
@@ -77,7 +77,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
     DType out_dtype = std::get<2>(key);
     std::vector<param_t> const & x = std::get<3>(key);
     runtime::ConvProfile* profile = (runtime::ConvProfile*)runtime::database.at({stream.context().device().architecture(), runtime::CONV}).get();
-    templates::Conv result = profile->predict(stream, in_dtype, out_dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], x[23], x[24], x[25], x[26], x[27], x[28], x[29]);
+    templates::Conv result = profile->predict(stream, in_dtype, out_dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], (ResidualType)x[23], x[24], x[25], x[26], x[27], x[28], x[29], x[30]);
     return std::make_shared<templates::Conv>(result);
   });
 
@@ -91,7 +91,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
-    generator = inference.get(key_type(stream, in_dtype, out_dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, num_outputs, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
+    generator = inference.get(key_type(stream, in_dtype, out_dtype, {C, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, upsample_d, upsample_h, upsample_w, activation, num_outputs, residual, Zk, crop_z_m0, crop_z_m1, crop_z_p0, crop_z_p1, crop_z_q0, crop_z_q1})).get();
   generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream,  I, F, O, bias, alpha, iscale, fscale, oscale, z_scale, Z);
 }
 

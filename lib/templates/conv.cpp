@@ -52,10 +52,10 @@ const size_t Conv::Nparams = Nshapes + Ntune;
 Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t K, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
            param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
            ActivationType activation, size_t num_outputs,
-           param_t Zk, param_t z_crop_m0, param_t z_crop_m1, param_t z_crop_p0, param_t z_crop_p1, param_t z_crop_q0, param_t z_crop_q1,
+           ResidualType residual_type, param_t Zk, param_t z_crop_m0, param_t z_crop_m1, param_t z_crop_p0, param_t z_crop_p1, param_t z_crop_q0, param_t z_crop_q1,
            param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
   in_dtype_(in_dtype), out_dtype_(out_dtype), activation_(activation), num_outputs_(num_outputs),
-  Zk_(Zk), z_crop_m0_(z_crop_m0), z_crop_m1_(z_crop_m1), z_crop_p0_(z_crop_p0), z_crop_p1_(z_crop_p1), z_crop_q0_(z_crop_q0), z_crop_q1_(z_crop_q1),
+  residual_type_(residual_type), Zk_(Zk), z_crop_m0_(z_crop_m0), z_crop_m1_(z_crop_m1), z_crop_p0_(z_crop_p0), z_crop_p1_(z_crop_p1), z_crop_q0_(z_crop_q0), z_crop_q1_(z_crop_q1),
   C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
   stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
@@ -530,10 +530,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   /* -------------------------------------------- */
   /*         GENERATE STORE_COL FUNCTION          */
   /* -------------------------------------------- */
-  enum ResidualType{
-     NoResidual,
-     CatResidual
-  };
 
   auto make_store_col = [&](std::string const & name, ResidualType residual_type){
       iss << ".func " << name << "(.reg .b64 %po, .reg .b32 %Cs0";
@@ -558,13 +554,15 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
 
       if(residual_type == CatResidual){
-        for(size_t j = 0; j < vect_k ; j++)
-        for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-          iss << format(".reg {}.{} %rc{}_{};", vv, in_word_type, i, j) << std::endl;
-        for(size_t i = 0 ; i < cs0_ ; i+=vec_){
-          iss << format("  .reg {}.{} %rz_{};", vv, in_word_type, i) << std::endl;
-          iss << format("  .reg {0}.{1} %rz{2}_0, %rz{2}_1, %rz{2}_2, %rz{2}_3;", vv, in_word_type, i) << std::endl;
-        }
+          for(size_t j = 0; j < vect_k ; j++)
+          for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+            iss << format(".reg {}.{} %rc{}_{};", vv, in_word_type, i, j) << std::endl;
+      }
+      if(residual_type != NoResidual){
+          for(size_t i = 0 ; i < cs0_ ; i+=vec_){
+            iss << format("  .reg {}.{} %rz_{};", vv, in_word_type, i) << std::endl;
+            iss << format("  .reg {0}.{1} %rz{2}_0, %rz{2}_1, %rz{2}_2, %rz{2}_3;", vv, in_word_type, i) << std::endl;
+          }
       }
 
       iss << std::endl;
@@ -572,29 +570,47 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       for(size_t i = 0 ; i < cs0_ ; i+=c_inc)
         iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
 
-      if(residual_type == CatResidual){
+      if(residual_type != NoResidual){
           iss << std::endl;
           iss << "  /* Handle residual */" << std::endl;
+          if(residual_type == AddResidual){
+            iss << "  .reg .u32 %idz, %bidz;" << std::endl;
+            iss << "  .reg .pred %predgz;" << std::endl;
+            iss << "  mov.u32 %idz, %tid.z;" << std::endl;
+            iss << "  mov.u32 %bidz, %ctaid.z;" << std::endl;
+            iss << format("  setp.eq.s32 %predgz, %idz, 0;") << std::endl;
+            iss << format("  setp.eq.and.s32 %predgz, %bidz, 0, %predgz;") << std::endl;
+            iss << format("  @!%predgz bra RESIDUAL_DONE;") << std::endl;
+          }
+
           for(size_t i = 0 ; i < cs0_ ; i+=vec_)
           for(size_t s = 0; s < vec_; s+=z_inc){
             iss << format("  @%predc{} ld.global{}.{} %rz{}_0{}, [%pz];", i + s, z_aligned?vv:"", in_word_type, i, z_aligned?"":vs[s]) << std::endl;
             if(i + s < cs0_ - z_inc)
               iss << format("  mad.wide.s32 %pz, %diffz{0}, 1, %pz;", i + s) << std::endl;
           }
+
           if(out_dtype_==INT8X4_TYPE)
-          for(size_t i = 0; i < cs0_; i+=vec_)
-          for(size_t s = 0; s < vec_; ++s){
-            iss << format("  mov.b32 %rz_{0}{1}, %rz{0}_0{1};", i, vs[s]) << std::endl;
-            for(size_t jj = 0; jj < vect_k; ++jj){
-              iss << format("  shr.b32 %rz{0}_{1}{2}, %rz_{0}{2}, {3};", i, jj, vs[s], 8*jj) << std::endl;
-              iss << format("  and.b32 %rz{0}_{1}{2}, %rz{0}_{1}{2}, 0xff;", i, jj, vs[s]) << std::endl;
-              iss << format("  cvt.rn.f32.s8 %rz{0}_{1}{2}, %rz{0}_{1}{2};", i, jj, vs[s]) << std::endl;
+            for(size_t i = 0; i < cs0_; i+=vec_)
+            for(size_t s = 0; s < vec_; ++s){
+              iss << format("  mov.b32 %rz_{0}{1}, %rz{0}_0{1};", i, vs[s]) << std::endl;
+              for(size_t jj = 0; jj < vect_k; ++jj){
+                iss << format("  shr.b32 %rz{0}_{1}{2}, %rz_{0}{2}, {3};", i, jj, vs[s], 8*jj) << std::endl;
+                iss << format("  and.b32 %rz{0}_{1}{2}, %rz{0}_{1}{2}, 0xff;", i, jj, vs[s]) << std::endl;
+                iss << format("  cvt.rn.f32.s8 %rz{0}_{1}{2}, %rz{0}_{1}{2};", i, jj, vs[s]) << std::endl;
+              }
             }
-          }
+
           for(size_t i = 0 ; i < cs0_ ; i+=vec_)
           for(size_t s = 0; s < vec_; s+=z_inc)
-          for(size_t jj = 0; jj < vect_k; ++jj)
-          iss << format("  div.approx.f32 %rc{0}_{1}{2}, %rz{0}_{1}{2}, %z_scale;", i, jj, vs[s]) << std::endl;
+          for(size_t jj = 0; jj < vect_k; ++jj){
+            iss << format("  div.approx.f32 %rz{0}_{1}{2}, %rz{0}_{1}{2}, %z_scale;", i, jj, vs[s]) << std::endl;
+            if(residual_type_ == CatResidual)
+              iss << format("  mov.f32 %rc{0}_{1}{2}, %rz{0}_{1}{2};", i, jj, vs[s]) << std::endl;
+            if(residual_type_ == AddResidual)
+              iss << format("  add.f32 %rc{0}_{1}{2}, %rz{0}_{1}{2}, %rc{0}_{1}{2};", i, jj, vs[s]) << std::endl;
+          }
+          iss << "RESIDUAL_DONE:" << std::endl;
       }
 
       iss << std::endl;
@@ -630,11 +646,13 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   iss << std::endl;
   iss << "/* Store single column of the result tensor */" << std::endl;
-  make_store_col("store_col", NoResidual);
+  make_store_col("store_col", residual_type_!=CatResidual?residual_type_:NoResidual);
 
-  iss << std::endl;
-  iss << "/* Concatenate residual column into result tensor */" << std::endl;
-  make_store_col("cat_residual_col", CatResidual);
+  if(residual_type_ == CatResidual){
+    iss << std::endl;
+    iss << "/* Concatenate residual column into result tensor */" << std::endl;
+    make_store_col("cat_residual_col", residual_type_);
+  }
 
 
 
@@ -1317,18 +1335,23 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       iss << format("  @%predk{0} call.uni store_col, (%po{0}, %Npix", j);
       for(size_t i = 0 ; i < cs0_ ; i+=vec_)
       for(size_t s = 0; s < vec_; s++)
-          iss << format(", %offc0_{}", i*bc0_ + s);
+        iss << format(", %offc0_{}", i*bc0_ + s);
       for(size_t i = 0; i < cs0_ - c_inc; i+=c_inc)
-          iss << format(", %diffc{}", i);
+        iss << format(", %diffc{}", i);
       for(size_t jj = 0; jj < vect_k ; jj++)
       for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-          iss << format(", %rc0_{}_{}", i, j*vect_k + jj);
+        iss << format(", %rc0_{}_{}", i, j*vect_k + jj);
       iss << format(", %o_scale{}", n);
+      if(residual_type_ == AddResidual){
+        iss << format(", %pz{}, %z_scale", j);
+        for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc)
+          iss << format(", %diffz{}", i);
+      }
       iss << ");" << std::endl;
     }
 
 
-    if(Zk_ > 0){
+    if(residual_type_ == CatResidual && Zk_ > 0){
       iss << std::endl;
       iss << "  // Concatenate residual" << std::endl;
       iss << "  .reg .u32 %inc;" << std::endl;
@@ -1370,7 +1393,9 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
                    float alpha, // Relu
                    float i_scale, float f_scale, std::vector<float> o_scale, float z_scale,// Quantization
                    driver::Buffer const *Z // Merge
-                   ){
+                   )
+{
+  int32_t Ko = (residual_type_ == AddResidual)?Kout_:Kout_ + Zk_;
   // Data-type size
   // I strides
   int32_t strideIw = size_of(in_dtype_);
@@ -1391,7 +1416,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   int32_t strideOp = Q_*strideOq;
   int32_t strideOm = P_*strideOp;
   int32_t strideOk = M_*strideOm;
-  int32_t strideOn = (Kout_ + Zk_)*strideOk;
+  int32_t strideOn = Ko*strideOk;
 
   // Z strides
   int32_t strideZq = size_of(out_dtype_);
@@ -1501,7 +1526,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   kernel.setArg(idx++, z_scale);
   if(gridz_>1)
     for(size_t i = 0; i < num_outputs_; i++)
-      O[i].set_zero(stream, N_*(Kout_ + Zk_)*M_*P_*Q_*size_of(out_dtype_));
+      O[i].set_zero(stream, N_*Ko*M_*P_*Q_*size_of(out_dtype_));
   stream.enqueue(kernel, {grid0, grid1, gridz_}, {bc0_, bc1_, bz_});
 }
 

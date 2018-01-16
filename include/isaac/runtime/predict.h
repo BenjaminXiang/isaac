@@ -121,7 +121,8 @@ public:
                           param_t pad_d, param_t pad_h, param_t pad_w,
                           param_t stride_d, param_t stride_h, param_t stride_w,
                           param_t upsample_d, param_t upsample_h, param_t upsample_w,
-                          ActivationType activation, size_t num_outputs, param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, size_t num_re_evaluate = 1);
+                          ActivationType activation, size_t num_outputs,
+                          ResidualType residual, param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, size_t num_re_evaluate = 1);
 };
 
 class PoolProfile: public Profile{

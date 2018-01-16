@@ -20,8 +20,10 @@ def PackNd(input, alpha, beta):
 
 
 class ConvNdFunction(Function):
-    def __init__(self, activation, alpha, scale, pad = (0, 0, 0), strides = (1, 1, 1), upsample = (1, 1, 1), crop = (0, 0, 0, 0, 0, 0), quantized_in = False, quantized_out = False):
+    def __init__(self, activation, alpha, scale, pad = (0, 0, 0), strides = (1, 1, 1), upsample = (1, 1, 1), crop = (0, 0, 0, 0, 0, 0), quantized_in = False, quantized_out = False, residual = ''):
         self.activation = activation.encode('utf-8')
+        self.residual = '' if residual is None else residual
+        self.residual = self.residual.encode('utf-8')
         self.alpha = float(alpha)
         self.scale = (scale[0], scale[1], tuple(map(float, scale[2])), scale[3])
         self.num_outputs = len(self.scale[2])
@@ -51,7 +53,7 @@ class ConvNdFunction(Function):
                       bias, # Bias
                       self.activation, self.alpha, # Activation
                       self.quantized_in, self.quantized_out, self.scale[0], self.scale[1], p_scales, self.scale[3], # Quantization
-                      z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5]# Crop-cat
+                      self.residual, z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5]# Crop-cat
                       )
         if self.num_outputs == 1:
             return output[0]
@@ -150,7 +152,7 @@ class ConvNd(nn.modules.conv._ConvNd):
         self.quantized_out = False
         self.dim = dim
         self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim))
-        self.skip = 'cat'
+        self.residual = residual
 
     def set_quantizer(self, quantizer):
         self.quantizer = quantizer
@@ -165,7 +167,7 @@ class ConvNd(nn.modules.conv._ConvNd):
         # Bias
         bias = self.bias if self.bias is not None else torch.autograd.Variable()
         # Computation
-        y = ConvNdFunction(self.activation, self.alpha, self.scale, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out)\
+        y = ConvNdFunction(self.activation, self.alpha, self.scale, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out, residual = self.residual)\
                           (x, self.weight, bias, torch.autograd.Variable() if z is None else z)
         # Quantize if requested
         if self.quantizer:
@@ -229,129 +231,50 @@ class MaxPool3d(MaxPoolNd):
     def __init__(self, kernel_size, stride=1):
         super(MaxPool3d, self).__init__(kernel_size, _triple(stride))
 
-
 #############################
-###     Modules           ###
+###  PyTorch Equivalent   ###
 #############################
-def ConvBiasActivation(in_num, out_num, kernel_size, activation, alpha, with_isaac):
-    dim = len(kernel_size)
-    if with_isaac:
-        Type = [Conv1d, Conv2d, Conv3d][dim - 1]
-        return Type(in_num, out_num, kernel_size, activation=activation, alpha=alpha)
-    else:
-        Type = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim - 1]
-        conv = Type(in_num, out_num, kernel_size=kernel_size, padding=0, stride=1, bias=True)
-        if activation == 'relu':
-            act = nn.LeakyReLU(alpha)
-        if activation == 'sigmoid':
-            act = nn.Sigmoid()
-        if activation == 'linear':
-            return nn.Sequential(conv)
-        return nn.Sequential(conv, act)
 
-def MaxPool(kernel_size, stride, with_isaac):
+def ConvBiasActivation(in_num, out_num, kernel_size, bias, activation, alpha):
     dim = len(kernel_size)
-    if with_isaac:
-        return [MaxPool1d, MaxPool2d, MaxPool3d][dim - 1](kernel_size, stride)
-    else:
-        return [nn.MaxPool1d, nn.MaxPool2d, nn.MaxPool3d][dim - 1](kernel_size, stride)
+    Type = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim - 1]
+    conv = Type(in_num, out_num, kernel_size = kernel_size, padding=0, stride=1, bias = bias)
+    if activation == 'relu':
+        act = nn.LeakyReLU(alpha)
+    if activation == 'sigmoid':
+        act = nn.Sigmoid()
+    if activation == 'linear':
+        return nn.Sequential(conv)
+    return nn.Sequential(conv, act)
+
 
 class UpConvCropCat(nn.Module):
-    def __init__(self, strides, in_num, out_num):
+
+    def __init__(self, strides, in_num, out_num, residual):
         super(UpConvCropCat, self).__init__()
-        self.upsample = nn.ConvTranspose3d(in_num, in_num, strides, strides, groups=in_num, bias=False)
+        self.upsample = nn.ConvTranspose3d(in_num, in_num, strides, strides, groups = in_num, bias = False)
         self.upsample.weight.data.fill_(1.0)
         self.upsample.weight.requires_grad = False
-        self.conv_bias_relu = ConvBiasActivation(in_num, out_num, (1, 1, 1), activation = 'linear', alpha = 1, with_isaac = False)
+        self.conv_bias_relu = ConvBiasActivation(in_num, out_num, (1, 1, 1), bias = True, activation = 'linear', alpha = 1)
+        self.residual = residual
 
 
     def forward(self, x, z):
         x = self.upsample(x)
         x = self.conv_bias_relu(x)
         offset = [(z.size()[i]-x.size()[i])//2 for i in range(2,z.dim())]
-        return torch.cat([x, z[:,:,offset[0]:offset[0]+x.size(2),
-                                offset[1]:offset[1]+x.size(3),
-                                offset[2]:offset[2]+x.size(4)]], 1)
+        z_crop = z[:,:,offset[0]:offset[0]+x.size(2),
+                       offset[1]:offset[1]+x.size(3),
+                       offset[2]:offset[2]+x.size(4)]
+        if self.residual == 'cat':
+            return torch.cat([x, z_crop], 1)
+        if self.residual == 'add':
+            return x + z_crop
 
 
-class VggBlock(nn.Module):
-    def __init__(self, in_num, out_num, kernel_size, window_size, activation, alpha, pool, with_isaac, return_tmp=True):
-        super(VggBlock, self).__init__()
-        self.conv1 = ConvBiasActivation(in_num, out_num, kernel_size, activation, alpha, with_isaac)
-        self.conv2 = ConvBiasActivation(out_num, out_num, kernel_size, activation, alpha, with_isaac)
-        self.pool = MaxPool(window_size, window_size, with_isaac = with_isaac) if pool else None
-        self.return_tmp = return_tmp
+#############################
+###     Helpers           ###
+#############################
 
-    def forward(self, x):
-        z = self.conv1(x)
-        z = self.conv2(z)
-        z_tmp, z_out = z if isinstance(z, tuple) else (z, z)
-        y = self.pool(z_tmp) if self.pool is not None else z_out
-        return (z_out, y) if self.return_tmp else y
-
-
-class UpVggCropCatBlock(nn.Module):
-    def UpConvCropCat(self, strides, in_num, out_num, with_isaac):
-        if with_isaac:
-            return Conv3d(in_num, out_num, (1,1,1), upsample=strides, activation = 'linear', bias = True, residual = 'cat')
-        else:
-            return UpConvCropCat(strides, in_num, out_num)
-
-    def __init__(self, in_num, out_num, kernel_size, window_size, activation, alpha, with_isaac):
-        super(UpVggCropCatBlock, self).__init__()
-        self.upsample = self.UpConvCropCat(window_size, in_num, out_num, with_isaac = with_isaac)
-        self.conv1 = ConvBiasActivation(2*out_num, out_num, kernel_size, activation, alpha, with_isaac)
-        self.conv2 = ConvBiasActivation(out_num, out_num, kernel_size, activation, alpha, with_isaac)
-
-    def forward(self, x, z):
-        x = self.upsample(x, z)
-        x = self.conv1(x)
-        x = self.conv2(x)
-        return x
-
-
-class UNet(nn.Module):
-
-    def __init__(self, out_num=3, filters=[1,24,72,216,648], relu_slope=0.005, with_isaac=False):
-        super(UNet, self).__init__()
-        # Attributes
-        self.relu_slope = relu_slope
-        self.filters = filters
-        self.depth = len(filters) - 1
-        self.out_num = out_num
-
-        # Downward convolutions
-        self.down_conv = nn.ModuleList([VggBlock(filters[x], filters[x+1], (3, 3, 3), (1, 2, 2), 'relu', relu_slope, x < self.depth - 1, with_isaac)
-                                        for x in range(self.depth)])
-        # Upward convolution
-        self.up_conv = nn.ModuleList([UpVggCropCatBlock(filters[x], filters[x-1], (3, 3, 3), (1, 2, 2), 'relu', relu_slope, with_isaac)
-                                        for x in range(self.depth, 1, -1)])
-        # Final layer
-        self.final = ConvBiasActivation(filters[1], out_num, kernel_size=(1, 1, 1), activation = 'sigmoid', alpha = 0, with_isaac = with_isaac)
-
-    def forward(self, x):
-        z = [None]*self.depth
-        for i in range(self.depth):
-            z[i], x = self.down_conv[i](x)
-        for i in range(self.depth - 1):
-            x = self.up_conv[i](x, z[self.depth - 2 - i])
-        x = self.final(x)
-        return x
-
-    def fuse(self):
-        result = UNet(self.out_num, self.filters, self.relu_slope, True).cuda()
-        parameters = [x for x in self.parameters() if x.requires_grad]
-        for x, y in zip(result.parameters(), parameters):
-            if(len(x.data.size()) > 1):
-                x.data = y.data.permute(1, 2, 3, 4, 0).clone()
-            else:
-                x.data = y.data
-        return result
-
-    def quantize(self, x, approximate = True):
-        quantizer = Quantizer(approximate)
-        for module in self.modules():
-            if hasattr(module, 'set_quantizer'):
-                module.set_quantizer(quantizer)
-        self.forward(x)
-        return self
+ConvType = {1:Conv1d, 2:Conv2d, 3:Conv3d}
+PoolType = {1:MaxPool1d, 2:MaxPool2d, 3:MaxPool3d}

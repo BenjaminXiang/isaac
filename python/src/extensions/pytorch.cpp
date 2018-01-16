@@ -18,11 +18,18 @@ void resizeNd(THCState *state, THCudaIntTensor *tensor, int nDimension, long *si
 { return THCudaIntTensor_resizeNd(state, tensor, nDimension, size, stride);}
 
 
-inline isaac::ActivationType sc_activation(const std::string & activation){
+inline isaac::ActivationType get_sc_activation(const std::string & activation){
     if(activation == "relu") return isaac::ReLU;
     if(activation == "linear") return isaac::Linear;
     if(activation == "sigmoid") return isaac::Sigmoid;
     throw std::runtime_error("Unknown activation function");
+}
+
+inline isaac::ResidualType get_sc_residual(const std::string & residual){
+    if(residual == "") return isaac::NoResidual;
+    if(residual == "cat") return isaac::CatResidual;
+    if(residual == "add") return isaac::AddResidual;
+    throw std::runtime_error("Unknown residual function");
 }
 
 /* Convolution */
@@ -34,9 +41,11 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, in
                   THCudaTensor *bias,
                   const char * activation, float alpha,
                   size_t quantized_in, size_t quantized_out, float iscale, float fscale, float * oscale, float zscale,
-                  OUT_TYPE *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
+                  const char * residual, OUT_TYPE *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   int DIM = nDimension(state, inputs) - 2;
+  isaac::ActivationType sc_activation = get_sc_activation(activation);
+  isaac::ResidualType sc_residual = get_sc_residual(residual);
 
   // Datatype
   isaac::DType in_dtype = quantized_in?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
@@ -72,7 +81,9 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, in
   size_t Zk = (z)?size(state, z, 1):0;
   long output_sizes[5];
   output_sizes[0] = N;
-  output_sizes[1] = K/vect_k + Zk;
+  output_sizes[1] = K/vect_k;
+  if(sc_residual == isaac::CatResidual)
+    output_sizes[1] += Zk;
   if(DIM > 2) output_sizes[2] = M;
   if(DIM > 1) output_sizes[2 + (DIM > 2)] = P;
   if(DIM > 0) output_sizes[2 + (DIM > 2) + (DIM > 1)] = Q;
@@ -100,9 +111,9 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, in
               upsample_d, upsample_h, upsample_w,
               I, F, O.data(), num_outputs,
               Bias.get(),
-              sc_activation(activation), alpha,
+              sc_activation, alpha,
               iscale, fscale, std::vector<float>(oscale, oscale + num_outputs), zscale,
-              Zk*vect_k, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
+              sc_residual, Zk*vect_k, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
 
   return 1;
 }
@@ -167,10 +178,10 @@ int isaac_conv_nd_float_float(THCudaTensor *inputs, THCudaTensor *filters, THCud
                 const char * activation,
                 float alpha,
                 size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale, float zscale,
-                THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
+                const char * residual, THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
-                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
+                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, residual, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
 int isaac_conv_nd_int_float(THCudaIntTensor *inputs, THCudaIntTensor *filters, THCudaTensor **outputs, int num_outputs,
@@ -181,10 +192,10 @@ int isaac_conv_nd_int_float(THCudaIntTensor *inputs, THCudaIntTensor *filters, T
                 const char * activation,
                 float alpha,
                 size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale, float zscale,
-                THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
+                const char * residual, THCudaTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
-                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
+                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, residual, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
 int isaac_conv_nd_float_int(THCudaTensor *inputs, THCudaTensor *filters, THCudaIntTensor **outputs, int num_outputs,
@@ -195,10 +206,10 @@ int isaac_conv_nd_float_int(THCudaTensor *inputs, THCudaTensor *filters, THCudaI
                 const char * activation,
                 float alpha,
                 size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale, float zscale,
-                THCudaIntTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
+                const char * residual, THCudaIntTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
-                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
+                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, residual, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
 int isaac_conv_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *filters, THCudaIntTensor **outputs, int num_outputs,
@@ -209,10 +220,10 @@ int isaac_conv_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *filters, THC
                 const char * activation,
                 float alpha,
                 size_t quantized_in, size_t quantized_out, float iscale, float fscale, float* oscale, float zscale,
-                THCudaIntTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
+                const char * residual, THCudaIntTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   return isaac_conv_nd_impl(inputs, filters, outputs, num_outputs, upsample_d, upsample_h, upsample_w, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, bias, activation, alpha,
-                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
+                            quantized_in, quantized_out, iscale, fscale, oscale, zscale, residual, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
 /* Max-pooling */

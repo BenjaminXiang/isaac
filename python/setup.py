@@ -73,7 +73,7 @@ def main():
           description="ISAAC",
           author='Philippe Tillet',
           author_email='ptillet@g.harvard.edu',
-          packages=['isaac', 'isaac.pytorch', 'isaac.pytorch.c_lib'],
+          packages=['isaac', 'isaac.pytorch', 'isaac.pytorch.models', 'isaac.pytorch.c_lib'],
           libraries=[core],
           ext_package='isaac',
           ext_modules=extensions,
