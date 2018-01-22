@@ -3,6 +3,14 @@ import torch.nn as nn
 import isaac.pytorch as sc
 
 # Building Block
+class ResidualBlock(nn.Module):
+
+    def __init__(self, in_num, out_num, kernel_size, window_size, bias, activation, alpha, pool, return_conv):
+        super(ResidualBlock, self).__init__()
+        dim = len(kernel_size)
+        self.conv1 =  sc.ConvType[dim](in_num, out_num, kernel_size, bias = bias, activation = activation, alpha = alpha)
+        self.conv2 =  sc.ConvType[dim](out_num, out_num, kernel_size, bias = bias, activation = activation, alpha = alpha)
+
 
 class VggBlock(nn.Module):
 

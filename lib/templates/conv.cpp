@@ -972,20 +972,22 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << format("  mul.lo.s32 %CTRS, %C, %Nfilt;") << std::endl;
 
   iss << "  bar.sync 0;" << std::endl;
+
   iss << std::endl;
-  iss << "  // First load" << std::endl;
+  iss << "  // Predicates initialization" << std::endl;
   iss << format("  setp.lt.s32 %predcrs, %idctrs, %CTRS;") << std::endl;
   iss << format("  setp.gt.s32 %predloop, %CTRS, %bound;") << std::endl;
   iss << format("  @!%predcrs mov.b32 %maskf, 0x0;") << std::endl;
   for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-  for(size_t s = 0; s < vec_; s++)
+  for(size_t s = 0; s < vec_; s++){
+    iss << format("  // Pixel {0}", i + s) << std::endl;
     iss << format("  ld.const.b32 %maski{0}, [%p_mask{0}];", i + s) << std::endl;;
-  for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-  for(size_t s = 0; s < vec_ ; ++s)
-    iss << format("  and.b32 %mask{}, %maskf, %maski{};", i + s, i + s) << std::endl;
-  for(size_t i = 0; i < cl0; i+=vec_*bf_pqn)
-  for(size_t s = 0; s < vec_ ; ++s)
-    iss << format("  setp.ne.b32 %predi{}, %mask{}, 0x0;", i + s, i + s, i + s) << std::endl;
+    iss << format("  and.b32 %mask{0}, %maskf, %maski{0};", i + s) << std::endl;
+    iss << format("  setp.ne.b32 %predi{0}, %mask{0}, 0x0;", i + s) << std::endl;
+  }
+
+  iss << std::endl;
+  iss << "  // First loads" << std::endl;
   ldg_i();
   iss << format("  @!%predloop bra LAST_ITER;") << std::endl;
   ldg_f(false);

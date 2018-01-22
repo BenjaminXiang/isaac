@@ -291,8 +291,10 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
         iss << format("  .reg .b32 %offc0_{0};", i) << std::endl;
     iss << format("  .reg .b32 %Npixm<{0}>;", vec_) << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
-    for(size_t s = 0; s < vec_; s++)
+    for(size_t s = 0; s < vec_; s++){
         iss << format("  .reg .pred %predi{0}, %pred{0};", i + s) << std::endl;
+        iss << format("  .reg .b32 %mask{};", i + s) << std::endl;
+    }
     iss << "  .reg .b32 %offi, %maskf, %masks, %inc_i, %p_delta, %writelut, %readlut, %inc_delta, %p_inc_delta, %inc_mask, %p_inc_mask;" << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
@@ -354,20 +356,45 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     ptr_ldg_i();
 
     iss << std::endl;
-    iss << "  /* Inner Loop */" << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
+    iss << "  /* ------ Accumulate ---------- */" << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
     iss << "  mov.u32 %TRS, %Nfilt;" << std::endl;
     iss << "  setp.gt.u32 %predloop, %TRS, 0;" << std::endl;
+    iss << "  mov.b32 %maskf, 0x1;" << std::endl;
 
+    iss << std::endl;
+    iss << "  // Main loop" << std::endl;
+    iss << "  @!%predloop bra ENDLOOP;" << std::endl;
     iss << "LOOP:" << std::endl;
+    iss << std::endl;
+    iss << "  // Compute predicates" << std::endl;
+    if(pad_d_ == 0 && pad_h_ == 0 && pad_w_ == 0 && stride_d_ == 1 && stride_h_ == 1 && stride_w_ == 1){
+        for(size_t i = 0; i < cl0; i+=vec_*bc0_)
+        for(size_t s = 0; s < vec_; s++)
+          iss << format("  and.pred %predi{}, %predi{}, %predloop;", i + s, i + s) << std::endl;
+    }
+    else{
+      iss << format("  @!%predloop mov.b32 %maskf, 0x0;") << std::endl;
+      for(size_t i = 0; i < cl0; i+=vec_*bc0_)
+      for(size_t s = 0; s < vec_; s++){
+          iss << format("  ld.const.b32 %maski{0}, [%p_mask{0}];", i + s) << std::endl;
+          iss << format("  and.b32 %mask{}, %maskf, %maski{};", i + s, i + s) << std::endl;
+          iss << format("  setp.ne.b32 %predi{}, %mask{}, 0x0;", i + s, i + s, i + s) << std::endl;
+          iss << format("  add.s32 %p_mask{0}, %p_mask{0}, 4;", i + s) << std::endl;
+      }
+    }
 
     iss << std::endl;
-    iss << "  /* Load */" << std::endl;
+    iss << "  // Load" << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
-    for(size_t s = 0; s < vec_; s++)
+    for(size_t s = 0; s < vec_; s++){
+      iss << format("  @!%predi{0} mov.{1} %rri{2}{3}, 0x0;", i + s, io_dtype, i, vs[s])  << std::endl;
       iss << format("  @%predi{0} ld.global.cg.{1} %rri{2}{3}, [%pi{0}];", i + s, io_dtype, i, vs[s])  << std::endl;
+    }
 
     iss << std::endl;
-    iss << "  /* Max Pooling */" << std::endl;
+    iss << "  // Pool" << std::endl;
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++){
       if(dtype_ == FLOAT_TYPE)
@@ -387,15 +414,16 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
       }
     }
 
+
     iss << std::endl;
-    iss << "  /* Increment pointers */" << std::endl;
+    iss << "  // Increment image pointers " << std::endl;
     iss << format("  ld.const.b32 %inc_i, [%p_delta];") << std::endl;
     iss << format("  add.s32 %p_delta, %p_delta, 4;") << std::endl;
     for(size_t pqn = 0; pqn < cl0; pqn += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
       iss << format("  mad.wide.s32 %pi{0}, %inc_i, 1, %pi{0};", pqn + s) << std::endl;
 
-    iss << "  /* Loop back */" << std::endl;
+    iss << "  // Loop back" << std::endl;
     iss << format("  sub.s32 %TRS, %TRS, 1;") << std::endl;
     iss << "  setp.gt.u32 %predloop, %TRS, 0;" << std::endl;
     iss << "  @%predloop bra.uni LOOP;" << std::endl;

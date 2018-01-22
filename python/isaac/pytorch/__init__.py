@@ -12,7 +12,6 @@ import numpy as np
 def pad_left(dim, x, value):
     return (value,)*(dim-len(x)) + x
 
-
 def PackNd(input, alpha, beta):
     output = torch.Tensor().type(torch.IntTensor).cuda()
     isaac_pack_nd(input, output, alpha, beta)
@@ -146,7 +145,7 @@ class ConvNd(nn.modules.conv._ConvNd):
         self.activation = activation
         self.alpha = alpha
         self.scale = scale
-        self.upsample = upsample
+        self.upsample = pad_left(3,upsample,1)
         self.quantizer = None
         self.quantized_in = False
         self.quantized_out = False
@@ -198,19 +197,20 @@ class Conv3d(ConvNd):
 
 class MaxPoolNd(nn.Module):
 
-    def __init__(self, kernel_size, stride):
+    def __init__(self, kernel_size, stride, padding):
         super(MaxPoolNd, self).__init__()
         self.quantizer = None
         self.quantized = False
         self.kernel_size = kernel_size
         self.stride = stride
+        self.padding = padding
 
     def set_quantizer(self, quantizer):
         self.quantizer = quantizer
 
     def forward(self, x):
         # Computations
-        y = MaxPoolNdFunction(self.kernel_size, strides=self.stride, quantized=self.quantized)(x)
+        y = MaxPoolNdFunction(self.kernel_size, pad=self.padding, strides=self.stride, quantized=self.quantized)(x)
         # Quantization if requested
         if self.quantizer:
             self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
@@ -220,16 +220,16 @@ class MaxPoolNd(nn.Module):
 
 
 class MaxPool1d(MaxPoolNd):
-    def __init__(self, kernel_size, stride=1):
-        super(MaxPool1d, self).__init__(kernel_size, _single(stride))
+    def __init__(self, kernel_size, stride=1, padding=0):
+        super(MaxPool1d, self).__init__(_single(kernel_size), _single(stride), _single(padding))
 
 class MaxPool2d(MaxPoolNd):
-    def __init__(self, kernel_size, stride=1):
-        super(MaxPool2d, self).__init__(kernel_size, _pair(stride))
+    def __init__(self, kernel_size, stride=1, padding=0):
+        super(MaxPool2d, self).__init__(_pair(kernel_size), _pair(stride), _pair(padding))
 
 class MaxPool3d(MaxPoolNd):
-    def __init__(self, kernel_size, stride=1):
-        super(MaxPool3d, self).__init__(kernel_size, _triple(stride))
+    def __init__(self, kernel_size, stride=1, padding=0):
+        super(MaxPool3d, self).__init__(_triple(kernel_size), _triple(stride), _triple(padding))
 
 #############################
 ###  PyTorch Equivalent   ###
