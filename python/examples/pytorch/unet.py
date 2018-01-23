@@ -43,12 +43,12 @@ def convert(legacy):
 
 if __name__ == '__main__':
     # Load data
-    T = np.array(h5py.File('./im_uint8_half.h5','r')['main']).astype(np.float32)/255
+    T = np.array(h5py.File('./data/em/im_uint8_half.h5','r')['main']).astype(np.float32)/255
     I, J, K = 31, 204, 204
 
     # Build models
     unet_ref = unet3D_m1().cuda()
-    unet_ref.load_state_dict(torch.load('./net_iter_100000_m1.pth')['state_dict'])
+    unet_ref.load_state_dict(torch.load('./data/em/net_iter_100000_m1.pth')['state_dict'])
 
     # Quantize
     X = T[:I, :J, :K].reshape(1, 1, I, J, K)
@@ -71,6 +71,10 @@ if __name__ == '__main__':
     print('Error: {:.4f} [+- {:.4f}]'.format(np.mean(errors), np.std(errors)))
 
     # Benchmark
+    X = T[:31, :204, :204].reshape(1, 1, I, J, K)
+    X = Variable(torch.from_numpy(X), volatile=True).cuda()
+    y_sc = unet_sc(X)
+    Nvoxels = np.prod(y_sc.size()[2:])
     t_sc = [int(x*1e3) for x in timeit.repeat(lambda: (unet_sc(X), torch.cuda.synchronize()), repeat=1, number=1)]
     t_ref = [int(x*1e3) for x in timeit.repeat(lambda: (unet_ref(X), torch.cuda.synchronize()), repeat=1, number=1)]
-    print('Time: {}ms (Isaac) ; {}ms (PyTorch)'.format(t_sc[0], t_ref[0]))
+    print('Performance: {:.2f} Mvox/s (Isaac) ; {:.2f} Mvox/s (PyTorch)'.format(Nvoxels/min(t_sc)*1e-3, Nvoxels/min(t_ref)*1e-3))
