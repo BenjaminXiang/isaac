@@ -91,7 +91,7 @@ void export_templates(py::module&& m){
 
 
   py::class_<tpt::Pool>(m, "Pool")
-      .def(py::init<sc::DType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
+      .def(py::init<sc::DType, sc::PoolType, param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
                     param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t>())
       .def("dump", &tpt::Pool::dump)
       .def("enqueue", &tpt::Pool::enqueue)

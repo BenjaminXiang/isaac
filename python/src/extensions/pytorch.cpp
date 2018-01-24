@@ -18,6 +18,12 @@ void resizeNd(THCState *state, THCudaIntTensor *tensor, int nDimension, long *si
 { return THCudaIntTensor_resizeNd(state, tensor, nDimension, size, stride);}
 
 
+inline isaac::PoolType get_sc_pool(const std::string & activation){
+    if(activation == "avg") return isaac::AvgPool;
+    if(activation == "max") return isaac::MaxPool;
+    throw std::runtime_error("Unknown pooling function");
+}
+
 inline isaac::ActivationType get_sc_activation(const std::string & activation){
     if(activation == "relu") return isaac::ReLU;
     if(activation == "linear") return isaac::Linear;
@@ -119,7 +125,8 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, in
 }
 
 template<class TYPE>
-int isaac_max_pool_nd_impl(TYPE *inputs, TYPE *outputs,
+int isaac_pool_nd_impl(TYPE *inputs, TYPE *outputs,
+                      const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
                       size_t quantized,
@@ -158,7 +165,9 @@ int isaac_max_pool_nd_impl(TYPE *inputs, TYPE *outputs,
   isaac::driver::Buffer O(stream.context(), (CUdeviceptr)storage(state, outputs)->data, false);
 
   // Execute
-  isaac::POOL(stream.context().device(), stream, dtype, C*vect_c, M, P, Q, N, T, R, S, D, H, W,
+  isaac::POOL(stream.context().device(), stream, dtype,
+              get_sc_pool(type),
+              C*vect_c, M, P, Q, N, T, R, S, D, H, W,
               pad_d, pad_h, pad_w,
               stride_d, stride_h, stride_w,
               I, O);
@@ -226,22 +235,24 @@ int isaac_conv_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *filters, THC
                             quantized_in, quantized_out, iscale, fscale, oscale, zscale, residual, z, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1);
 }
 
-/* Max-pooling */
-int isaac_max_pool_nd_float(THCudaTensor *inputs, THCudaTensor *outputs,
+/* Pooling */
+int isaac_pool_nd_float(THCudaTensor *inputs, THCudaTensor *outputs,
+                      const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
                       size_t quantized,
                       size_t stride_d, size_t stride_h, size_t stride_w){
-  return isaac_max_pool_nd_impl(inputs, outputs, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized, stride_d, stride_h, stride_w);
+  return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized, stride_d, stride_h, stride_w);
 }
 
 
-int isaac_max_pool_nd_int(THCudaIntTensor *inputs, THCudaIntTensor *outputs,
+int isaac_pool_nd_int(THCudaIntTensor *inputs, THCudaIntTensor *outputs,
+                      const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
                       size_t quantized,
                       size_t stride_d, size_t stride_h, size_t stride_w){
-  return isaac_max_pool_nd_impl(inputs, outputs, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized, stride_d, stride_h, stride_w);
+  return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized, stride_d, stride_h, stride_w);
 }
 
 

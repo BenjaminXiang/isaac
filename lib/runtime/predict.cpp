@@ -222,7 +222,7 @@ templates::Conv ConvProfile::predict(driver::Stream& stream, DType in_dtype, DTy
 // Pooling
 PoolProfile::PoolProfile(u_char* data): Profile(data, templates::Pool::Nshapes){}
 
-templates::Pool PoolProfile::predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+templates::Pool PoolProfile::predict(driver::Stream& stream, DType dtype, PoolType pool_type, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
                       param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate)
 {
     param_t PACK = (dtype==INT8X4_TYPE)?4:1;
@@ -231,7 +231,7 @@ templates::Pool PoolProfile::predict(driver::Stream& stream, DType dtype, param_
     benchmark_t benchmark;
     std::vector<param_t> shapes{dtype, N*M*P*Q*C/PACK, T*R*S};
     std::vector<param_t> x = Profile::predict(device, shapes, templates::Pool::check_valid, benchmark, num_re_evaluate);
-    return templates::Pool(dtype, C, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
+    return templates::Pool(dtype, pool_type, C, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w,
                            x[0], x[1], x[2], x[3]);
 }
 

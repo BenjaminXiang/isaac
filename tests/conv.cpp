@@ -345,7 +345,7 @@ int do_test(sc::driver::Context const & ctx, std::string const & prefix, size_t 
 int main(){
   auto ctx = drv::backend::contexts::get_default();
   std::cout << "===============" << std::endl;
-  std::cout << "FPROP:" << std::endl;
+  std::cout << "CONV:" << std::endl;
   std::cout << "===============" << std::endl;
   std::cout << "---------------" << std::endl;
   do_test<float, float>(ctx, "core", 5, 13, 19, 11, 15, 17, 3, 3, 3, 0, 0, 0, 1, 1, 1, 1, 1, 1, false, 1, sc::NoResidual, 0, 0, 0, 0, 0, 0, 0);

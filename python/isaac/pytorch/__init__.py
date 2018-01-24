@@ -26,9 +26,9 @@ class ConvNdFunction(Function):
         self.alpha = float(alpha)
         self.scale = (scale[0], scale[1], tuple(map(float, scale[2])), scale[3])
         self.num_outputs = len(self.scale[2])
-        self.pad = pad
-        self.strides = strides
-        self.upsample = upsample
+        self.pad = pad_left(3, pad, 0)
+        self.strides = pad_left(3, strides, 1)
+        self.upsample = pad_left(3, upsample, 1)
         self.crop = crop
         self.ffi = c_lib._ffi
         self.quantized_in = quantized_in
@@ -58,19 +58,21 @@ class ConvNdFunction(Function):
             return output[0]
         return output
 
-class MaxPoolNdFunction(Function):
-    def __init__(self, kernel_size, pad = (0, 0, 0), strides = (1, 1, 1), quantized = False):
+class PoolNdFunction(Function):
+    def __init__(self, type, kernel_size, pad = (0, 0, 0), strides = (1, 1, 1), quantized = False):
         self.kernel_size = pad_left(3, kernel_size, 1)
-        self.pad = pad_left(3, pad, 1)
+        self.pad = pad_left(3, pad, 0)
         self.strides = pad_left(3, strides, 1)
         self.ffi = cffi.FFI()
         self.quantized = quantized
-        self.function = {False: isaac_max_pool_nd_float,
-                                 True: isaac_max_pool_nd_int}[quantized]
+        self.type = type.encode('utf-8')
+        self.function = {False: isaac_pool_nd_float,
+                         True: isaac_pool_nd_int}[quantized]
 
     def forward(self, input):
         output = input.new()
         self.function(input, output,
+                      self.type,
                       self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
                       self.pad[0], self.pad[1], self.pad[2],
                       self.quantized,
@@ -83,8 +85,7 @@ class MaxPoolNdFunction(Function):
 class Quantizer:
 
     def scale(self, x):
-        sorted = x.abs().view(-1).sort(dim = 0, descending = True)[0]
-        return 127. / sorted[0]
+        return 127. / torch.max(torch.abs(x))
         #idxs = [int(rho * len(sorted)) for rho in np.arange(0, 1e-5, 1e-6)]
         #scales = [127. / sorted[idx] for idx in idxs]
         #clip = lambda x, scale: torch.round(torch.clamp(x * scale, -128, 127)) / scale
@@ -96,16 +97,16 @@ class Quantizer:
         self.module_of = dict()
         self.approximate = approximate
 
-    def quantize(self, weight, x, y, z):
+    def quantize(self, weight, x, y, z, is_first_conv, is_last_conv):
         # Update scales
         scale = [1., 1., [1.], 1.]
         quantized_in, quantized_out = False, False
 
-        if weight.data.size()[0] % 4 == 0:
+        if weight.data.size()[0] % 4 == 0 and not is_first_conv:
             quantized_in = True
             scale[0] = self.history[id(x)]
             scale[1] = self.scale(weight.data)
-        if weight.data.size()[-1] % 4 == 0:
+        if weight.data.size()[-1] % 4 == 0 and not is_last_conv:
             quantized_out = True
             scale[2][0] = self.history[id(y)] = self.scale(y.data)
 
@@ -145,13 +146,16 @@ class ConvNd(nn.modules.conv._ConvNd):
         self.activation = activation
         self.alpha = alpha
         self.scale = scale
-        self.upsample = pad_left(3,upsample,1)
+        self.upsample = upsample
         self.quantizer = None
         self.quantized_in = False
         self.quantized_out = False
+        self.is_last_conv = False
+        self.is_first_conv = False
         self.dim = dim
         self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim))
         self.residual = residual
+
 
     def set_quantizer(self, quantizer):
         self.quantizer = quantizer
@@ -161,16 +165,17 @@ class ConvNd(nn.modules.conv._ConvNd):
         if z is None:
             crop = [1, 1, 1, 1, 1, 1]
         else:
-            offset = [(z.size()[i]-x.size()[i]*self.upsample[i - 2])//2 for i in range(2,z.dim())]
+            offset = tuple([(z.size()[i]-x.size()[i]*self.upsample[i - 2])//2 for i in range(2,z.dim())])
+            offset = pad_left(3, offset, 0)
             crop = (offset[0], offset[0], offset[1], offset[1], offset[2], offset[2])
         # Bias
         bias = self.bias if self.bias is not None else torch.autograd.Variable()
         # Computation
-        y = ConvNdFunction(self.activation, self.alpha, self.scale, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out, residual = self.residual)\
+        y = ConvNdFunction(self.activation, self.alpha, self.scale, pad=self.padding, strides=self.stride, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out, residual = self.residual)\
                           (x, self.weight, bias, torch.autograd.Variable() if z is None else z)
         # Quantize if requested
         if self.quantizer:
-            self.scale, self.weight, self.quantized_in, self.quantized_out = self.quantizer.quantize(self.weight, x, y, z)
+            self.scale, self.weight, self.quantized_in, self.quantized_out = self.quantizer.quantize(self.weight, x, y, z, self.is_first_conv, self.is_last_conv)
             self.quantizer.module_of.update({id(y): self})
             self.quantizer = None
         return y
@@ -195,13 +200,14 @@ class Conv3d(ConvNd):
 ###      Pooling          ###
 #############################
 
-class MaxPoolNd(nn.Module):
+class PoolNd(nn.Module):
 
-    def __init__(self, kernel_size, stride, padding):
-        super(MaxPoolNd, self).__init__()
+    def __init__(self, kernel_size, type, stride, padding):
+        super(PoolNd, self).__init__()
         self.quantizer = None
         self.quantized = False
         self.kernel_size = kernel_size
+        self.type = type
         self.stride = stride
         self.padding = padding
 
@@ -210,7 +216,7 @@ class MaxPoolNd(nn.Module):
 
     def forward(self, x):
         # Computations
-        y = MaxPoolNdFunction(self.kernel_size, pad=self.padding, strides=self.stride, quantized=self.quantized)(x)
+        y = PoolNdFunction(self.type, self.kernel_size, pad=self.padding, strides=self.stride, quantized=self.quantized)(x)
         # Quantization if requested
         if self.quantizer:
             self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
@@ -219,17 +225,32 @@ class MaxPoolNd(nn.Module):
         return y
 
 
-class MaxPool1d(MaxPoolNd):
+# Max
+class MaxPool1d(PoolNd):
     def __init__(self, kernel_size, stride=1, padding=0):
-        super(MaxPool1d, self).__init__(_single(kernel_size), _single(stride), _single(padding))
+        super(MaxPool1d, self).__init__(_single(kernel_size), 'max', _single(stride), _single(padding))
 
-class MaxPool2d(MaxPoolNd):
+class MaxPool2d(PoolNd):
     def __init__(self, kernel_size, stride=1, padding=0):
-        super(MaxPool2d, self).__init__(_pair(kernel_size), _pair(stride), _pair(padding))
+        super(MaxPool2d, self).__init__(_pair(kernel_size), 'max', _pair(stride), _pair(padding))
 
-class MaxPool3d(MaxPoolNd):
+class MaxPool3d(PoolNd):
     def __init__(self, kernel_size, stride=1, padding=0):
-        super(MaxPool3d, self).__init__(_triple(kernel_size), _triple(stride), _triple(padding))
+        super(MaxPool3d, self).__init__(_triple(kernel_size), 'max', _triple(stride), _triple(padding))
+
+
+# Average
+class AvgPool1d(PoolNd):
+    def __init__(self, kernel_size, stride=1, padding=0):
+        super(AvgPool1d, self).__init__(_single(kernel_size), 'avg', _single(stride), _single(padding))
+
+class AvgPool2d(PoolNd):
+    def __init__(self, kernel_size, stride=1, padding=0):
+        super(AvgPool2d, self).__init__(_pair(kernel_size), 'avg', _pair(stride), _pair(padding))
+
+class AvgPool3d(PoolNd):
+    def __init__(self, kernel_size, stride=1, padding=0):
+        super(AvgPool3d, self).__init__(_triple(kernel_size), 'avg', _triple(stride), _triple(padding))
 
 #############################
 ###  PyTorch Equivalent   ###

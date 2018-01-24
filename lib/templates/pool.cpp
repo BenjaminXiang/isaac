@@ -48,9 +48,13 @@ const size_t Pool::Nshapes = 3;
 const size_t Pool::Ntune = 4;
 const size_t Pool::Nparams = Nshapes + Ntune;
 
-Pool::Pool(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+Pool::Pool(DType dtype, PoolType pool_type,
+           param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+           param_t pad_d, param_t pad_h, param_t pad_w,
+           param_t stride_d, param_t stride_h, param_t stride_w,
            param_t vec, param_t bc0, param_t cs0, param_t):
-    dtype_(dtype), C_(C), D_(D), H_(H), W_(W), N_(N), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
+    dtype_(dtype), pool_type_(pool_type),
+    C_(C), D_(D), H_(H), W_(W), N_(N), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
     pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
     stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
     vec_(vec), bc0_(bc0), cs0_(cs0), u_(1)
@@ -165,6 +169,14 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     if(vec_==1)
       vs[0] = "";
 
+    std::string neutral_element;
+    if(pool_type_ == MaxPool)
+        neutral_element = (dtype_==INT8X4_TYPE)?"0x80000000":"0xff800000";
+    if(pool_type_ == AvgPool)
+        neutral_element = "0x0";
+
+    size_t vect_in = (dtype_==INT8X4_TYPE)?4:1;
+
     auto ptr_ldg_i = [&](){
         iss << format("  // I offsets") << std::endl;
         iss << format("  mul.lo.s32 %mM, %M, -1;") << std::endl;
@@ -265,7 +277,7 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  .reg .pred %in_bounds, %predloop;" << std::endl;
     iss << "  .reg .b32 %id, %id0, %bid0;" << std::endl;
     iss << "  .reg .b32 %trs, %tr, %t, %r, %s, %nexttrs, %nexttr, %nextt, %nextr, %nexts, %tdiff, %rdiff, %sdiff;" << std::endl;
-    iss << "  .reg .b32 %Npix, %Nfilt, %Dmpad, %Hmpad, %Wmpad, %D, %H, %W, %M, %P, %Q, %C, %mM, %mP, %mQ, %mC;" << std::endl;
+    iss << "  .reg .b32 %Npix, %fNfilt, %Nfilt, %Dmpad, %Hmpad, %Wmpad, %D, %H, %W, %M, %P, %Q, %C, %mM, %mP, %mQ, %mC;" << std::endl;
     iss << "  .reg .b32 %pad_d, %pad_h, %pad_w;" << std::endl;
     iss << "  .reg .b32 %stride_d, %stride_h, %stride_w;" << std::endl;
     iss << "  .reg .b32 %strideIc, %strideId, %strideIh, %strideIw, %strideIn;" << std::endl;
@@ -273,6 +285,7 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << "  .reg .b32 %inci;" << std::endl;
     iss << "  .reg .b64 %pi, %pc;" << std::endl;
     iss << "  .reg .b32 %acc, %icvt<4>, %ccvt<4>;" << std::endl;
+    iss << "  .reg .b8 %b8_icvt<4>, %b8_ccvt<4>;" << std::endl;
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
       iss << format("  .reg .b64 %pi{0};", i + s) << std::endl;
@@ -282,8 +295,13 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
       iss << format("  .reg .b32 %offIncdhw{0}, %offIncdh{0}, %offIncd{0}, %offInc{0}, %offIw{0}, %offIcd{0}, %offIh{0}, %offIc{0}, %offId{0}, %offIn{0}, %dlo{0}, %dhi{0}, %hlo{0}, %hhi{0}, %wlo{0}, %whi{0}, %maskd{0}, %maskh{0}, %maskw{0};", i + s) << std::endl;
     }
     iss << "  .reg .b32 %TRS;" << std::endl;
+    for(size_t j = 0; j < vect_in; j++)
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
-      iss << format("  .reg {0}.b32 %rri{1}, %rc{1};", vv, i) << std::endl;
+      iss << format("  .reg {0}.b32 %rc{1}_{2};", vv, i, j) << std::endl;
+
+    for(size_t i = 0; i < cl0; i+=vec_*bc0_)
+      iss << format("  .reg {0}.b32 %rri{1};", vv, i) << std::endl;
+
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
       iss << format("  .reg .b64 %pc{0};", i) << std::endl;
     iss << "  .reg .b32 %offc0;" << std::endl;
@@ -301,9 +319,10 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
         iss << format("  .reg .b32 %offi{0}, %p_delta{0}, %inc_i{0}, %maski{0}, %p_mask{0};", i + s) << std::endl;
 
     iss << "  // Initialize C" << std::endl;
+    for(size_t j = 0; j < vect_in; j++)
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
-      iss << format("  mov.b32 %rc{0}{1}, {2};", i, vs[s], (dtype_==INT8X4_TYPE)?"0x80808080":"0xff800000") << std::endl;
+      iss << format("  mov.b32 %rc{0}_{1}{2}, {3};", i, j, vs[s], neutral_element) << std::endl;
 
     iss << std::endl;
     iss << "  ld.param.u64 %pc, [_pc];" << std::endl;
@@ -395,22 +414,23 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
 
     iss << std::endl;
     iss << "  // Pool" << std::endl;
+    for(size_t j = 0; j < vect_in; j++)
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++){
-      if(dtype_ == FLOAT_TYPE)
-        iss << format("  max.f32 %rc{0}{1}, %rri{0}{1}, %rc{0}{1};", i, vs[s]) << std::endl;
+      if(dtype_ == FLOAT_TYPE){
+        if(pool_type_ == MaxPool)
+            iss << format("  max.f32 %rc{0}_{1}{2}, %rri{0}{2}, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
+        if(pool_type_ == AvgPool)
+            iss << format("  add.f32 %rc{0}_{1}{2}, %rri{0}{2}, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      }
       if(dtype_ == INT8X4_TYPE){
-        iss << format("  mov.b32 %acc, 0;") << std::endl;
-        for(size_t b = 0; b < 4; b++){
-          iss << format("  and.b32 %icvt{0}, %rri{1}{2}, {3};", b, i, vs[s], (0xFF) << 8*b) << std::endl;
-          iss << format("  and.b32 %ccvt{0}, %rc{1}{2}, {3};", b, i, vs[s], (0xFF) << 8*b) << std::endl;
-          iss << format("  shl.b32 %icvt{0}, %icvt{0}, {1};", b, (24 - 8*b)) << std::endl;
-          iss << format("  shl.b32 %ccvt{0}, %ccvt{0}, {1};", b, (24 - 8*b)) << std::endl;
-          iss << format("  max.s32 %ccvt{0}, %icvt{0}, %ccvt{0};", b) << std::endl;
-          iss << format("  shr.b32 %ccvt{0}, %ccvt{0}, {1};", b, (24 - 8*b)) << std::endl;
-          iss << format("  or.b32 %acc, %acc, %ccvt{0};", b) << std::endl;
-        }
-        iss << format("  mov.b32 %rc{0}{1}, %acc;", i, vs[s]) << std::endl;
+        iss << format("  and.b32 %icvt{0}, %rri{1}{2}, {3};", j, i, vs[s], (0xFF) << 8*j) << std::endl;
+        iss << format("  shr.b32 %icvt{0}, %icvt{0}, {1};", j, 8*j) << std::endl;
+        iss << format("  cvt.s32.s8 %icvt{0}, %icvt{0};", j) << std::endl;
+        if(pool_type_ == MaxPool)
+          iss << format("  max.s32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %icvt{1};", i, j, vs[s]) << std::endl;
+        if(pool_type_ == AvgPool)
+          iss << format("  add.s32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %icvt{1};", i, j, vs[s]) << std::endl;
       }
     }
 
@@ -430,12 +450,43 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
 
     iss << std::endl;
     iss << "ENDLOOP:" << std::endl;
+
+    if(pool_type_ == AvgPool){
+      iss << std::endl;
+      iss << "  /* Divide by window size (compute average) */" << std::endl;
+      iss << "  cvt.rn.f32.s32 %fNfilt, %Nfilt;" << std::endl;
+      for(size_t j = 0; j < vect_in; j++)
+      for(size_t i = 0; i < cl0; i += vec_*bc0_)
+      for(size_t s = 0; s < vec_; s++){
+        if(dtype_ == FLOAT_TYPE)
+          iss << format("  div.approx.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %fNfilt;", i, j, vs[s]) << std::endl;
+        if(dtype_ == INT8X4_TYPE){
+            iss << format("  cvt.rn.f32.s32 %rc{0}_{1}{2}, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
+            iss << format("  div.approx.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %fNfilt;", i, j, vs[s]) << std::endl;
+            iss << format("  cvt.rni.sat.s32.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
+        }
+      }
+    }
+
+    if(dtype_ == INT8X4_TYPE){
+      iss << std::endl;
+      iss << "  /* Pack */" << std::endl;
+      for(size_t i = 0; i < cl0; i += vec_*bc0_)
+      for(size_t s = 0; s < vec_; s++){
+        for(size_t j = 0; j < vect_in; j++)
+          iss << format("  cvt.sat.s8.s32 %b8_ccvt{1}, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
+        iss << format("  mov.b32 %rc{0}_0{1}, {{%b8_ccvt0, %b8_ccvt1, %b8_ccvt2, %b8_ccvt3}};", i, vs[s]) << std::endl;
+      }
+    }
+
+    iss << std::endl;
     iss << "  /* Offsets */" << std::endl;
     iss << format("  mad.lo.s32 %offc0, %bid0, {}, 0;", cl0) << std::endl;
     iss << format("  mad.lo.s32  %offc0, %id0, {}, %offc0;", vec_) << std::endl;
     for(size_t i = 0 ; i < cl0 ; i+= bc0_*vec_)
       iss << format("  add.s32 %offc0_{0}, %offc0, {0};", i) << std::endl;
 
+    iss << std::endl;
     iss << "  /* Write back */" << std::endl;
     for(size_t i = 0; i < cl0; i+= bc0_*vec_)
       iss << format("  mad.wide.s32 %pc{0}, %offc0_{0}, %strideOq, %pc;", i, dtsize) << std::endl;
@@ -448,7 +499,7 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     bool aligned = (C_*M_*P_*Q_) % vec_ == 0;
     for(size_t i = 0 ; i < cl0 ; i+=bc0_*vec_){
     for(size_t s = 0; s < vec_; s+=(aligned?vec_:1))
-        iss << format("  @%pred{} st.global{}.{} [%pc{} + {}], %rc{}{};", i + s, aligned?vv:"", io_dtype, i, dtsize*s, i, aligned?"":vs[s]) << std::endl;
+        iss << format("  @%pred{} st.global{}.{} [%pc{} + {}], %rc{}_0{};", i + s, aligned?vv:"", io_dtype, i, dtsize*s, i, aligned?"":vs[s]) << std::endl;
     }
     iss << "}" << std::endl;
 

@@ -29,6 +29,12 @@
 
 namespace isaac{
 
+enum PoolType{
+  MaxPool,
+  AvgPool
+};
+
+
 namespace templates{
 
 class Pool: public Generator{
@@ -42,7 +48,10 @@ public:
   static const size_t Nparams;
 
 public:
-  Pool(DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
+  Pool(DType dtype, PoolType pool_type,
+       param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+       param_t pad_d, param_t pad_h, param_t pad_w,
+       param_t stride_d, param_t stride_h, param_t stride_w,
        param_t vec = 1, param_t bc0 = 32, param_t cs0 = 4, param_t u = 1);
   // Execution
   std::string dump(driver::Device const & device, std::string const & name);
@@ -53,6 +62,8 @@ public:
 
 private:
   DType dtype_;
+  PoolType pool_type_;
+  // Shapes
   param_t C_;
   param_t D_;
   param_t H_;

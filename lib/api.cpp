@@ -97,7 +97,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
 
 
 void POOL(driver::Device const &, driver::Stream & stream,
-          DType dtype, param_t C, param_t M, param_t P, param_t Q, param_t N, param_t T, param_t R, param_t S,
+          DType dtype, PoolType pool_type, param_t C, param_t M, param_t P, param_t Q, param_t N, param_t T, param_t R, param_t S,
           param_t D, param_t H, param_t W, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
           driver::Buffer const & I, driver::Buffer& O,
           templates::Pool* generator)
@@ -109,7 +109,7 @@ void POOL(driver::Device const &, driver::Stream & stream,
     runtime::PoolProfile* profile = (runtime::PoolProfile*)runtime::database.at({stream.context().device().architecture(), runtime::POOL}).get();
     DType dtype = std::get<1>(key);
     std::vector<param_t> const & x = std::get<2>(key);
-    templates::Pool result = profile->predict(stream, dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16]);
+    templates::Pool result = profile->predict(stream, dtype, (PoolType)x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17]);
     return std::make_shared<templates::Pool>(result);
   });
   // Build the kernel
@@ -121,7 +121,7 @@ void POOL(driver::Device const &, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
-    generator = inference.get(key_type(stream, dtype, {C, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w})).get();
+    generator = inference.get(key_type(stream, dtype, {pool_type, C, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w})).get();
   generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream, I, O);
 }
 

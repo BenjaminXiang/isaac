@@ -549,6 +549,9 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
         for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc)
           iss << format(", .reg .b32 %diffz{}", i);
       }
+      if(residual_type == AddResidual){
+        iss << ",  .reg .b32 %alpha";
+      }
       iss << "){" << std::endl;
 
       iss << format("  .reg .pred %predc<{}>;", cs0_) << std::endl;
@@ -609,6 +612,22 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
               iss << format("  mov.f32 %rc{0}_{1}{2}, %rz{0}_{1}{2};", i, jj, vs[s]) << std::endl;
             if(residual_type_ == AddResidual)
               iss << format("  add.f32 %rc{0}_{1}{2}, %rz{0}_{1}{2}, %rc{0}_{1}{2};", i, jj, vs[s]) << std::endl;
+          }
+
+          if(residual_type_ == AddResidual){
+            if(activation_ == ReLU){
+              iss << std::endl;
+              iss << "  /* ---------------------------- */" << std::endl;
+              iss << "  /* ------------ ReLU ---------- */" << std::endl;
+              iss << "  /* ---------------------------- */" << std::endl;
+              iss << "  .reg .b32 %leakage;" << std::endl;
+              for(size_t j = 0; j < vect_k ; j++)
+              for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+              for(size_t s = 0; s < vec_; ++s){
+                iss << format("  mul.f32 %leakage, %rc{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
+                iss << format("  slct.f32.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %leakage, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
+              }
+            }
           }
           iss << "RESIDUAL_DONE:" << std::endl;
       }
@@ -1190,34 +1209,37 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "BIAS_DONE:" << std::endl;
 
 
-  if(activation_ == ReLU){
-    iss << std::endl;
-    iss << "  /* ---------------------------- */" << std::endl;
-    iss << "  /* ------------ ReLU ---------- */" << std::endl;
-    iss << "  /* ---------------------------- */" << std::endl;
-    iss << "  .reg .b32 %leakage, %alpha;" << std::endl;
-    iss << "  ld.param.b32 %alpha, [_alpha];" << std::endl;
-    for(size_t j = 0; j < cs1_ ; j++)
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s){
-      iss << format("  mul.f32 %leakage, %rc0_{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
-      iss << format("  slct.f32.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %leakage, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-    }
-  }
-  if(activation_ == Sigmoid){
-    iss << std::endl;
-    iss << "  /* ---------------------------- */" << std::endl;
-    iss << "  /* ------------ Sigmoid ------- */" << std::endl;
-    iss << "  /* ---------------------------- */" << std::endl;
-    iss << "  .reg .f32 %res, %arg;" << std::endl;
-    for(size_t j = 0; j < cs1_ ; j++)
-    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
-    for(size_t s = 0; s < vec_; ++s){
-      iss << format("  mul.f32 %arg, %rc0_{0}_{1}{2}, -1.;", i, j, vs[s]) << std::endl;
-      iss << format("  call (%res), exp, (%arg);", i, j, vs[s]) << std::endl;
-      iss << format("  add.f32 %rc0_{0}_{1}{2}, 1., %res;", i, j, vs[s]) << std::endl;
-      iss << format("  div.approx.f32 %rc0_{0}_{1}{2}, 1., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-    }
+  iss << "  .reg .b32 %alpha;" << std::endl;
+  iss << "  ld.param.b32 %alpha, [_alpha];" << std::endl;
+  if(residual_type_ != AddResidual){
+      if(activation_ == ReLU){
+        iss << std::endl;
+        iss << "  /* ---------------------------- */" << std::endl;
+        iss << "  /* ------------ ReLU ---------- */" << std::endl;
+        iss << "  /* ---------------------------- */" << std::endl;
+        iss << "  .reg .b32 %leakage;" << std::endl;
+        for(size_t j = 0; j < cs1_ ; j++)
+        for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+        for(size_t s = 0; s < vec_; ++s){
+          iss << format("  mul.f32 %leakage, %rc0_{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
+          iss << format("  slct.f32.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %leakage, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+        }
+      }
+      if(activation_ == Sigmoid){
+        iss << std::endl;
+        iss << "  /* ---------------------------- */" << std::endl;
+        iss << "  /* ------------ Sigmoid ------- */" << std::endl;
+        iss << "  /* ---------------------------- */" << std::endl;
+        iss << "  .reg .f32 %res, %arg;" << std::endl;
+        for(size_t j = 0; j < cs1_ ; j++)
+        for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+        for(size_t s = 0; s < vec_; ++s){
+          iss << format("  mul.f32 %arg, %rc0_{0}_{1}{2}, -1.;", i, j, vs[s]) << std::endl;
+          iss << format("  call (%res), exp, (%arg);", i, j, vs[s]) << std::endl;
+          iss << format("  add.f32 %rc0_{0}_{1}{2}, 1., %res;", i, j, vs[s]) << std::endl;
+          iss << format("  div.approx.f32 %rc0_{0}_{1}{2}, 1., %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+        }
+      }
   }
 
   if(out_dtype_==INT8X4_TYPE){
@@ -1348,6 +1370,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
         iss << format(", %pz{}, %z_scale", j);
         for(size_t i = 0; i < cs0_ - z_inc; i+=z_inc)
           iss << format(", %diffz{}", i);
+        iss << format(", %alpha") << std::endl;
       }
       iss << ");" << std::endl;
     }

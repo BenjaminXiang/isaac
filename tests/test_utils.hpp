@@ -18,7 +18,7 @@ bool is_correct(std::vector<T> const & iO, std::vector<T> const & rO, double eps
     T io = iO[i], ro = rO[i];
     T denom = std::max(std::fabs(io), std::fabs(ro));
     denom = (denom==0)?1:denom;
-    if(std::fabs(io - ro)/denom > eps || std::isnan(io)){
+    if(std::fabs(io - ro)/denom > eps || std::isnan(io) || (std::isinf(io) ^ std::isinf(ro))){
       std::cout << "idx " << i << ": " <<  io << " != " << ro << std::endl;
       return false;
     }

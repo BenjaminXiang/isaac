@@ -128,7 +128,7 @@ public:
 class PoolProfile: public Profile{
 public:
   PoolProfile(u_char* data);
-  templates::Pool predict(driver::Stream& stream, DType dtype, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
+  templates::Pool predict(driver::Stream& stream, DType dtype, PoolType pool_type, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
                         param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate = 1);
 };
 
