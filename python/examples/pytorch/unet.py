@@ -73,8 +73,7 @@ if __name__ == '__main__':
     # Benchmark
     X = T[:31, :204, :204].reshape(1, 1, I, J, K)
     X = Variable(torch.from_numpy(X), volatile=True).cuda()
-    y_sc = unet_sc(X)
     Nvoxels = np.prod(y_sc.size()[2:])
-    t_sc = [int(x*1e3) for x in timeit.repeat(lambda: (unet_sc(X), torch.cuda.synchronize()), repeat=1, number=1)]
-    t_ref = [int(x*1e3) for x in timeit.repeat(lambda: (unet_ref(X), torch.cuda.synchronize()), repeat=1, number=1)]
+    t_sc = [int(x*1e3) for x in timeit.repeat(lambda: (unet_sc(X), torch.cuda.synchronize()), repeat=10, number=1)]
+    t_ref = [int(x*1e3) for x in timeit.repeat(lambda: (unet_ref(X), torch.cuda.synchronize()), repeat=10, number=1)]
     print('Performance: {:.2f} Mvox/s (Isaac) ; {:.2f} Mvox/s (PyTorch)'.format(Nvoxels/min(t_sc)*1e-3, Nvoxels/min(t_ref)*1e-3))

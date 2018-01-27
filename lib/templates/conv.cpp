@@ -570,7 +570,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
       iss << std::endl;
       iss << "  /* Predicates */" << std::endl;
-      for(size_t i = 0 ; i < cs0_ ; i+=c_inc)
+      for(size_t i = 0 ; i < cs0_ ; i+=std::min(c_inc, z_inc))
         iss << format("  setp.lt.s32 %predc{0}, %offc{0}, %Cs0;", i) << std::endl;
 
       if(residual_type != NoResidual){
