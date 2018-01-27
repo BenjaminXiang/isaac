@@ -19,7 +19,7 @@ class VggBlock(nn.Module):
         dim = len(kernel_size)
         self.conv1 = sc.ConvType[dim](in_num, out_num, kernel_size, bias = bias, activation = activation, alpha = alpha)
         self.conv2 = sc.ConvType[dim](out_num, out_num, kernel_size, bias = bias, activation = activation, alpha = alpha)
-        self.pool = sc.PoolType[dim](window_size, window_size) if pool else None
+        self.pool = sc.MaxPoolType[dim](window_size, window_size) if pool else None
         self.return_conv = return_conv
 
     def forward(self, x):

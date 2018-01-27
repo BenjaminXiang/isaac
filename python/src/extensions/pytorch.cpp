@@ -10,6 +10,8 @@ WRAP0(int, nDimension, THCudaTensor)
 WRAP0(int, nDimension, THCudaIntTensor)
 WRAP1(int, size, THCudaTensor, int)
 WRAP1(int, size, THCudaIntTensor, int)
+WRAP1(int, stride, THCudaTensor, int)
+WRAP1(int, stride, THCudaIntTensor, int)
 WRAP0(THCudaStorage*, storage, THCudaTensor)
 WRAP0(THCudaIntStorage*, storage, THCudaIntTensor)
 void resizeNd(THCState *state, THCudaTensor *tensor, int nDimension, long *size, long *stride)
@@ -124,6 +126,7 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, in
   return 1;
 }
 
+/* Pooling */
 template<class TYPE>
 int isaac_pool_nd_impl(TYPE *inputs, TYPE *outputs,
                       const char * type,
@@ -174,6 +177,55 @@ int isaac_pool_nd_impl(TYPE *inputs, TYPE *outputs,
 
   return 1;
 }
+
+/* Linear */
+template<typename IN_TYPE, typename OUT_TYPE>
+int isaac_linear_impl(IN_TYPE *inputs, IN_TYPE *weights, OUT_TYPE *outputs,
+                       THCudaTensor *bias,
+                       float a, float b,
+                       size_t quantized_in, size_t quantized_out)
+{
+  isaac::DType in_dtype = quantized_in?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+  isaac::DType out_dtype = quantized_out?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+
+
+  // Inputs
+  long M = size(state, inputs, 0);
+  long Ki = size(state, inputs, 1);
+
+  // Filter
+  long Kf = size(state, weights, 1);
+  long N = size(state, weights, 0);
+
+
+  // Check shapes
+  if(Ki != Kf)
+    return 0;
+  long K = Ki;
+
+  // Create output
+  long output_sizes[2] = {M, N};
+  resizeNd(state, outputs, 2, output_sizes, NULL);
+
+  // Get strides
+  size_t lda = stride(state, weights, 0);
+  size_t ldb = stride(state, inputs, 0);
+  size_t ldc = stride(state, outputs, 0);
+
+  // Wrap handles
+  isaac::driver::Stream stream(THCState_getCurrentStream(state), false);
+  isaac::driver::Buffer A(stream.context(), (CUdeviceptr)storage(state, weights)->data, false);
+  isaac::driver::Buffer B(stream.context(), (CUdeviceptr)storage(state, inputs)->data, false);
+  isaac::driver::Buffer C(stream.context(), (CUdeviceptr)storage(state, outputs)->data, false);
+  std::unique_ptr<isaac::driver::Buffer> Bias;
+  if(bias)
+    Bias.reset(new isaac::driver::Buffer(stream.context(), (CUdeviceptr)storage(state, bias)->data, false));
+  isaac::scalar alpha(a, isaac::FLOAT_TYPE);
+  isaac::scalar beta(b, isaac::FLOAT_TYPE);
+
+  isaac::GEMM(stream.context().device(), stream, out_dtype, isaac::ISAAC_OP_T, isaac::ISAAC_OP_N, N, M, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, Bias.get());
+}
+
 
 extern "C"
 {
@@ -253,6 +305,14 @@ int isaac_pool_nd_int(THCudaIntTensor *inputs, THCudaIntTensor *outputs,
                       size_t quantized,
                       size_t stride_d, size_t stride_h, size_t stride_w){
   return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized, stride_d, stride_h, stride_w);
+}
+
+
+/* Linear */
+int isaac_linear_float_float(THCudaTensor *inputs, THCudaTensor *weights, THCudaTensor *outputs, THCudaTensor *bias,
+                            float alpha, float beta,
+                             size_t quantized_in, size_t quantized_out){
+  return isaac_linear_impl(inputs, weights, outputs, bias, alpha, beta, quantized_in, quantized_out);
 }
 
 

@@ -41,6 +41,7 @@ void GEMM(driver::Device const & device, driver::Stream & stream,
           DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
           param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
           scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C,
+          driver::Buffer const *bias = NULL,
           templates::GEMM* generator = NULL);
 
 void CONV(driver::Device const &, driver::Stream & stream,

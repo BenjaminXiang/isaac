@@ -79,13 +79,30 @@ class PoolNdFunction(Function):
                       self.strides[0], self.strides[1], self.strides[2])
         return output
 
+class LinearFunction(Function):
+
+    def __init__(self):
+        self.function = isaac_linear_float_float
+        self.alpha = 1.
+        self.beta = 0.
+        self.quantized_in = False
+        self.quantized_out = False
+
+    def forward(self, input, weight, bias):
+        output = input.new()
+        self.function(input, weight, output, bias,
+                      self.alpha, self.beta,
+                      self.quantized_in, self.quantized_out)
+        return output
+
 #############################
 ##       Quantization      ##
 #############################
 class Quantizer:
 
     def scale(self, x):
-        return 127. / torch.max(torch.abs(x))
+        eps = 1e-5
+        return 127. / (torch.max(torch.abs(x)) + eps)
         #idxs = [int(rho * len(sorted)) for rho in np.arange(0, 1e-5, 1e-6)]
         #scales = [127. / sorted[idx] for idx in idxs]
         #clip = lambda x, scale: torch.round(torch.clamp(x * scale, -128, 127)) / scale
@@ -252,6 +269,22 @@ class AvgPool3d(PoolNd):
     def __init__(self, kernel_size, stride=1, padding=0):
         super(AvgPool3d, self).__init__(_triple(kernel_size), 'avg', _triple(stride), _triple(padding))
 
+
+#############################
+###      Linear           ###
+#############################
+
+class Linear(nn.Linear):
+
+    def __init__(self, in_features, out_features, bias=True):
+        super(Linear, self).__init__(in_features, out_features, bias)
+
+    def forward(self, x):
+        y = LinearFunction()(x, self.weight, self.bias)
+        return y
+
+
+
 #############################
 ###  PyTorch Equivalent   ###
 #############################
@@ -298,4 +331,5 @@ class UpConvCropCat(nn.Module):
 #############################
 
 ConvType = {1:Conv1d, 2:Conv2d, 3:Conv3d}
-PoolType = {1:MaxPool1d, 2:MaxPool2d, 3:MaxPool3d}
+MaxPoolType = {1:MaxPool1d, 2:MaxPool2d, 3:MaxPool3d}
+AvgPoolType = {1:AvgPool1d, 2:AvgPool2d, 3:AvgPool3d}

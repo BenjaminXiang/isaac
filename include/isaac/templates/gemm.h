@@ -58,7 +58,7 @@ public:
        param_t ks, param_t bk, param_t kg);
   std::string dump(driver::Device const & device, std::string const & name);
   std::vector<param_t> tuning_params() const;
-  void enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C);
+  void enqueue(driver::Kernel& kernel, driver::Stream& queue, scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C, const driver::Buffer *bias = NULL);
   static void check_valid(driver::Device const & device, size_t M, param_t* params, uint8_t* valid);
   static double tflops(param_t M, param_t N, param_t K, double time);
 

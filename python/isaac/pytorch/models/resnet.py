@@ -47,8 +47,8 @@ class ResNet(nn.Module):
         self.layer2 = self._make_layer(block, 128, layers[1], stride=2)
         self.layer3 = self._make_layer(block, 256, layers[2], stride=2)
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
-        self.avgpool = nn.AvgPool2d(7, stride=1)
-        self.fc = nn.Linear(512 * block.expansion, num_classes)
+        self.avgpool = sc.AvgPool2d(kernel_size=7, stride=1)
+        self.fc = sc.Linear(512 * block.expansion, num_classes)
         # Use bias initialized to zero instead of no-bias because batch-norm will be folded
         for x in self.modules():
             if isinstance(x, sc.ConvNd):

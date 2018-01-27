@@ -251,10 +251,12 @@ def main():
     resnet_ref = resnet18(pretrained=True).cuda()
     resnet_ref.eval()
     resnet_sc = isaac.pytorch.models.resnet18()
-    resnet_sc.quantize(input, approximate=True)
+    #resnet_sc.quantize(input, approximate=True)
 
     y_ref = resnet_ref(input)
     y_sc = resnet_sc(input)
+
+    print(torch.norm(y_ref - y_sc)/torch.norm(y_ref))
     #validate(val_loader, model, criterion)
 
 

@@ -68,12 +68,12 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
   //ISAAC result
   std::vector<DTYPE> hC(M*N);
 
-//  //Test selected profile
-//  sc::GEMM(ctx.device(), stream, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, alpha, A, B, beta, C);
-//  stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
-//  if(!is_correct(hC, rC, max_rounding_error(DTYPE(K))))
-//    exit(EXIT_FAILURE);
-//  stream.write(C, true, 0, M*N*dtsize, iC.data());
+  //Test selected profile
+  sc::GEMM(ctx.device(), stream, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, alpha, A, B, beta, C);
+  stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
+  if(!is_correct(hC, rC, max_rounding_error(DTYPE(K))))
+    exit(EXIT_FAILURE);
+  stream.write(C, true, 0, M*N*dtsize, iC.data());
 
   std::vector<int> rv = {1, 2, 4};
   std::vector<int> rl = {1, 8};

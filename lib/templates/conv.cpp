@@ -1189,7 +1189,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  /* ---------------------------- */" << std::endl;
   iss << "  /* ------ Handle Bias -------- */" << std::endl;
   iss << "  /* ---------------------------- */" << std::endl;
-
   iss << format("  ld.param.u64 %bias, [_bias];") << std::endl;
   iss << format("  setp.ne.b64 %has_bias, %bias, 0;") << std::endl;
   iss << format("  @!%has_bias bra.uni BIAS_DONE;") << std::endl;
