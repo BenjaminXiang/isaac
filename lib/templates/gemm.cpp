@@ -69,10 +69,16 @@ struct io_conf{
 
 GEMM::GEMM(DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K, param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
      param_t vec, param_t bc0, param_t u, param_t bc1, param_t cs0, param_t, param_t cs1, param_t ba0, param_t ba1, param_t bb0, param_t bb1, param_t zs, param_t bz, param_t gridz):
-  dtype_(dtype), AT_(AT), BT_(BT), M_(M), N_(N), K_(K), offa_(offa), lda_(lda), offb_(offb), ldb_(ldb), offc_(offc), ldc_(ldc),
+  in_dtype_(dtype), out_dtype_(dtype), AT_(AT), BT_(BT), M_(M), N_(N), K_(K), offa_(offa), lda_(lda), offb_(offb), ldb_(ldb), offc_(offc), ldc_(ldc),
   vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), ba0_(ba0), ba1_(ba1), bb0_(bb0), bb1_(bb1),
   zs_(zs), bz_(bz), gridz_(gridz), stn_(8)
-{}
+{
+  // Handle packed layouts
+  size_t vect_k = (in_dtype_==INT8X4_TYPE)?4:1;
+  if(K_ % vect_k != 0)
+    throw std::runtime_error("K must be a multiple of 4");
+  K_ /= vect_k;
+}
 
 std::vector<param_t> GEMM::tuning_params() const
 { return {vec_, bc0_, bc1_, cs0_, cs1_, u_, ba0_, ba1_, bb0_, bb1_, zs_, bz_, gridz_}; }
@@ -143,15 +149,19 @@ void GEMM::check_valid(driver::Device const & device, size_t nkernels, uint32_t*
 
 /* Code generation */
 std::string GEMM::dump(drv::Device const & device, std::string const & name){
-//  static const param_t warp_size = 32;
   bool A_outer_contig = AT_==ISAAC_OP_N;
   bool B_outer_contig = BT_==ISAAC_OP_T;
-  size_t in_dtsize = size_of(dtype_);
-  std::string in_word_type = format("b{}", 8*in_dtsize);
 
-  std::string dtype = arith_str(dtype_);
-  std::string ab_dtype = dtype;
-  std::string sub_dtype = dtype;
+  // Input data-type
+  size_t in_dtsize = size_of(in_dtype_);
+  std::string in_word_type = format("b{}", 8*in_dtsize);
+  std::string in_compute_type = arith_str(in_dtype_);
+
+  // Output data-type
+
+
+  std::string ab_dtype = in_compute_type;
+  std::string sub_dtype = in_compute_type;
 
 
   size_t rl = zs_*bz_;
@@ -203,7 +213,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   io_conf Bio(ldb_, vec_, in_dtsize, false);
 
   uint8_t is_valid;
-  param_t params[] = {dtype_, AT_, BT_, M_, N_, K_, vec_, bc0_, u_, bc1_, cs0_, us_, cs1_, ba0_, ba1_, bb0_, bb1_, zs_, bz_, gridz_};
+  param_t params[] = {in_dtype_, AT_, BT_, M_, N_, K_, vec_, bc0_, u_, bc1_, cs0_, us_, cs1_, ba0_, ba1_, bb0_, bb1_, zs_, bz_, gridz_};
   check_valid(device, 1, params, &is_valid);
   if(!is_valid)
     throw invalid_parameters();
@@ -315,18 +325,19 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   };
 
   auto fma = [&](size_t kk){
-
     for(size_t r = 0 ; r < zs_ ; ++r)
     for(size_t m = 0; m < cs0_; m+=vec_)
-      for(size_t n = 0; n < cs1_; n+=vec_){
-          for(size_t nn = 0 ; nn < vec_ ; ++nn)
-            for(size_t mm = 0 ; mm < vec_ ; ++mm){
-              std::string rc = format("%rc{}_{}_{}{}", r, m, n + nn, vs[mm]);
-              std::string ra = format("%ra{}_{}_{}{}", r, m, kk, vs[mm]);
-              std::string rb = format("%rb{}_{}_{}{}", r, n, kk, vs[nn]);
-              iss << format("  fma.rn.{0} {1}, {2}, {3}, {1};", dtype, rc, ra, rb) << std::endl;
-            }
-      }
+    for(size_t n = 0; n < cs1_; n+=vec_)
+    for(size_t nn = 0 ; nn < vec_ ; ++nn)
+    for(size_t mm = 0 ; mm < vec_ ; ++mm){
+      std::string rc = format("%rc{}_{}_{}{}", r, m, n + nn, vs[mm]);
+      std::string ra = format("%ra{}_{}_{}{}", r, m, kk, vs[mm]);
+      std::string rb = format("%rb{}_{}_{}{}", r, n, kk, vs[nn]);
+      if(in_dtype_==INT8X4_TYPE)
+        iss << format("  dp4a.{0}.{0} {1}, {2}, {3}, {1};", in_compute_type, rc, ra, rb) << std::endl;
+      else
+        iss << format("  fma.rn.{0} {1}, {2}, {3}, {1};", in_compute_type, rc, ra, rb) << std::endl;
+    }
   };
 
   auto declare_register_tile = [&](char x, size_t M, size_t N, size_t dtinc){
@@ -377,7 +388,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     iss << format("  @%predc{} ld.global.{} %dcol{}, [%pc + {}];", m, ab_dtype, m,  m*bc0_*in_dtsize) << std::endl;
 
   for(size_t m = 0 ; m < cs0_ ; m++)
-    iss << format("  fma.rn.{0} %ccol{1}, %dcol{1}, %beta, %ccol{1};", dtype, m) << std::endl;
+    iss << format("  fma.rn.{0} %ccol{1}, %dcol{1}, %beta, %ccol{1};", in_compute_type, m) << std::endl;
 
   iss << "BETA_DONE:" << std::endl;
   for(size_t m = 0 ; m < cs0_; m++)
@@ -497,7 +508,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   for(size_t m = 0 ; m < cs0_ ; m+=vec_)
   for(size_t n = 0; n < cs1_ ; ++n)
   for(size_t mm = 0; mm < vec_ ; ++mm)
-     iss << format("  mov.{} %rc{}_{}_{}{}, 0.;", dtype, r, m, n, vs[mm]) << std::endl;
+     iss << format("  mov.{} %rc{}_{}_{}{}, 0.;", in_compute_type, r, m, n, vs[mm]) << std::endl;
 
 
 
@@ -669,7 +680,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   for(size_t m = 0 ; m < cs0_ ; m+=vec_)
   for(size_t n = 0; n < cs1_ ; n++)
   for(size_t s = 0; s < vec_; ++s)
-    iss << format("  add.{0} %rc0_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %rc0_{2}_{3}{4};", dtype, r, m, n, vs[s]) << std::endl;
+    iss << format("  add.{0} %rc0_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %rc0_{2}_{3}{4};", in_compute_type, r, m, n, vs[s]) << std::endl;
 
   if(bz_>1)
   {
@@ -706,7 +717,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       iss << "  bar.sync 0;" << std::endl;
     }
 
-
     iss << format("  mad.lo.u32 %readk, %idmn, {}, %shared;", cs0_*cs1_*in_dtsize) << std::endl;
     for(size_t n = 0; n < cs1_; n ++)
     for(size_t m = 0; m < cs0_; m += vec_)
@@ -714,6 +724,20 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       iss << format("  ld.shared.{} %rc0_{}_{}{}, [%readk + {}];", in_word_type, m, n, vs[s], ((m+s) + n*cs0_)*in_dtsize) << std::endl;
     }
   }
+
+  if(in_dtype_ == INT8X4_TYPE){
+    iss << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
+    iss << "  /* ------ Convert to FP32 ----- */" << std::endl;
+    iss << "  /* ---------------------------- */" << std::endl;
+    for(size_t j = 0; j < cs1_ ; j++)
+    for(size_t i = 0 ; i < cs0_ ; i+=vec_)
+    for(size_t s = 0; s < vec_; ++s){
+      iss << format("   cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %ab_scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+    }
+  }
+
 
   iss << "SCALE:" << std::endl;
   iss << format("  ld.param.{} %alpha, [_alpha];", in_word_type) << std::endl;
@@ -723,7 +747,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   for(size_t m = 0 ; m < cs0_ ; m+=vec_)
   for(size_t n = 0; n < cs1_ ; n++)
   for(size_t s = 0; s < vec_; ++s)
-    iss << format("  mul.{0} %rc{1}_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %alpha;", dtype, r, m, n, vs[s]) << std::endl;
+    iss << format("  mul.{0} %rc{1}_{2}_{3}{4}, %rc{1}_{2}_{3}{4}, %alpha;", in_compute_type, r, m, n, vs[s]) << std::endl;
 
   iss << std::endl;
   iss << "STORE_C:" << std::endl;
@@ -759,7 +783,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   for(size_t j = 0; j < cs1_ ; j++)
   for(size_t i = 0 ; i < cs0_ ; i+=vec_)
   for(size_t s = 0; s < vec_; ++s)
-    iss << format("  add.{0} %rc0_{1}_{2}{3}, %rc0_{1}_{2}{3}, %rbias{4};", dtype, i, j, vs[s], i + s) << std::endl;
+    iss << format("  add.{0} %rc0_{1}_{2}{3}, %rc0_{1}_{2}{3}, %rbias{4};", in_compute_type, i, j, vs[s], i + s) << std::endl;
   iss << "BIAS_DONE:" << std::endl;
 
 
@@ -799,7 +823,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
       iss << "  @%spin bra.uni SPIN;" << std::endl;
 
       iss << format("  setp.eq.u32 %predbidze0, %bidz, 0;") << std::endl;
-      iss << format("  @!%predbidze0 mov.{} %beta, 1.;", dtype) << std::endl;
+      iss << format("  @!%predbidze0 mov.{} %beta, 1.;", in_compute_type) << std::endl;
   }
 
   iss << std::endl;
@@ -854,7 +878,7 @@ void GEMM::enqueue(driver::Kernel &kernel, driver::Stream &queue, const scalar& 
   kernel.setArg(3, C);
   kernel.setArg(4, ldc_);
   kernel.setArg(5, offc_);
-  kernel.setArg(6, size_of(dtype_), alpha.data());
+  kernel.setArg(6, size_of(in_dtype_), alpha.data());
   // A
   kernel.setArg(7, A);
   kernel.setArg(8, lda_);
@@ -863,7 +887,7 @@ void GEMM::enqueue(driver::Kernel &kernel, driver::Stream &queue, const scalar& 
   kernel.setArg(10, B);
   kernel.setArg(11, ldb_);
   kernel.setArg(12, offb_);
-  kernel.setArg(13, size_of(dtype_), beta.data());
+  kernel.setArg(13, size_of(in_dtype_), beta.data());
   kernel.setArg(14, bound);
   // Locks
   kernel.setArg(15, locks);

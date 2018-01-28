@@ -63,7 +63,8 @@ public:
   static double tflops(param_t M, param_t N, param_t K, double time);
 
 private:
-  DType dtype_;
+  DType in_dtype_;
+  DType out_dtype_;
   //transposition
   IsaacOperation_t AT_;
   IsaacOperation_t BT_;

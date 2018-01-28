@@ -725,7 +725,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
       << "            .param .b32 _alpha," << std::endl
       << "            .param .b32 _Zk, .param .b32 _offZm, .param .b32 _offZp, .param .b32 _offZq, .param .b32 _strideZn, .param .b32 _strideZk, .param .b32 _strideZm, .param .b32 _strideZp, .param .b32 _strideZq, .param .b64 _pz," << std::endl
       << "            .param .b32 _bound," << std::endl
-      << "            .param .b32 _i_scale, .param .b32 _f_scale,";
+      << "            .param .b32 _if_scale,";
   for(size_t i = 0; i < num_outputs_; i++)
       iss << format("  .param .b32 _o_scale{},", i) << std::flush;
   iss << "            .param .b32 _z_scale" << std::endl;
@@ -840,7 +840,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   // Quantization
   iss << "  .reg .b32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
   iss << "  .reg .pred %predc;" << std::endl;
-  iss << "  .reg .b32 %scale, %i_scale, %f_scale;" << std::endl;
+  iss << "  .reg .b32 %scale, %if_scale;" << std::endl;
   for(size_t i = 0; i < num_outputs_; i++)
     iss << format("  .reg .b32 %o_scale{};", i) << std::endl;
   iss << "  .reg .b32 %z_scale;" << std::endl;
@@ -909,8 +909,7 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  ld.param.s32 %strideOn, [_strideOn];" << std::endl;
 
   iss << "  ld.param.s32 %bound, [_bound];" << std::endl;
-  iss << "  ld.param.b32 %i_scale, [_i_scale];" << std::endl;
-  iss << "  ld.param.b32 %f_scale, [_f_scale];" << std::endl;
+  iss << "  ld.param.b32 %if_scale, [_if_scale];" << std::endl;
   for(size_t n = 0; n < num_outputs_; n++)
     iss << format("  ld.param.b32 %o_scale{0}, [_o_scale{0}];", n) << std::endl;
   iss << "  ld.param.b32 %z_scale, [_z_scale];" << std::endl;
@@ -1150,18 +1149,15 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   }
 
   if(in_dtype_ == INT8X4_TYPE){
-
     iss << std::endl;
     iss << "  /* ---------------------------- */" << std::endl;
     iss << "  /* ------ Convert to FP32 ----- */" << std::endl;
     iss << "  /* ---------------------------- */" << std::endl;
-    iss << format("  mul.f32 %scale, %i_scale, %f_scale;") << std::endl;
-    iss << format("  div.approx.f32 %scale, 1., %scale;") << std::endl;
     for(size_t j = 0; j < cs1_ ; j++)
     for(size_t i = 0 ; i < cs0_ ; i+=vec_)
     for(size_t s = 0; s < vec_; ++s){
       iss << format("   cvt.rn.f32.s32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
-      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+      iss << format("  mul.f32 %rc0_{0}_{1}{2}, %if_scale, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
     }
   }
 
@@ -1543,8 +1539,7 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
   // Loop optimization
   kernel.setArg(idx++, bound);
   // Quantization
-  kernel.setArg(idx++, i_scale);
-  kernel.setArg(idx++, f_scale);
+  kernel.setArg(idx++, (float)1/(i_scale*f_scale));
   for(size_t i = 0; i < num_outputs_; i++)
     kernel.setArg(idx++, o_scale[i]);
   kernel.setArg(idx++, z_scale);
