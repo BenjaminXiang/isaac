@@ -302,12 +302,15 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
       iss << format("  .reg {0}.b32 %rri{1};", vv, i) << std::endl;
 
+    for(size_t s = 0; s < vec_; s++)
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
-      iss << format("  .reg .b64 %pc{0};", i) << std::endl;
+      iss << format("  .reg .b64 %pc{0};", i + s) << std::endl;
+
     iss << "  .reg .b32 %offc0;" << std::endl;
+    for(size_t s = 0; s < vec_; s++)
     for(size_t i = 0; i < cl0; i+=vec_*bc0_)
-        iss << format("  .reg .b32 %offc0_{0};", i) << std::endl;
-    iss << format("  .reg .b32 %Npixm<{0}>;", vec_) << std::endl;
+        iss << format("  .reg .b32 %offc0_{0};", i + s) << std::endl;
+
     for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++){
         iss << format("  .reg .pred %predi{0}, %pred{0};", i + s) << std::endl;
@@ -484,22 +487,23 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     iss << format("  mad.lo.s32 %offc0, %bid0, {}, 0;", cl0) << std::endl;
     iss << format("  mad.lo.s32  %offc0, %id0, {}, %offc0;", vec_) << std::endl;
     for(size_t i = 0 ; i < cl0 ; i+= bc0_*vec_)
-      iss << format("  add.s32 %offc0_{0}, %offc0, {0};", i) << std::endl;
+    for(size_t s = 0; s < vec_; s++)
+      iss << format("  add.s32 %offc0_{0}, %offc0, {0};", i + s) << std::endl;
 
     iss << std::endl;
     iss << "  /* Write back */" << std::endl;
     for(size_t i = 0; i < cl0; i+= bc0_*vec_)
-      iss << format("  mad.wide.s32 %pc{0}, %offc0_{0}, %strideOq, %pc;", i, dtsize) << std::endl;
-    for(size_t s = 0; s < vec_; ++s)
-      iss << format("  sub.s32 %Npixm{0}, %Npix, {0};", s) << std::endl;
-    for(size_t i = 0; i < cl0; i += vec_*bc0_)
     for(size_t s = 0; s < vec_; s++)
-      iss << format("  setp.lt.s32 %pred{}, %offc0_{}, %Npixm{};", i + s, i, s) << std::endl;
+      iss << format("  mad.wide.s32 %pc{0}, %offc0_{0}, %strideOq, %pc;", i + s, dtsize) << std::endl;
+
+    for(size_t i = 0; i < cl0; i += bc0_*vec_)
+    for(size_t s = 0; s < vec_; s++)
+      iss << format("  setp.lt.s32 %pred{0}, %offc0_{0}, %Npix;", i + s) << std::endl;
 
     bool aligned = (C_*M_*P_*Q_) % vec_ == 0;
     for(size_t i = 0 ; i < cl0 ; i+=bc0_*vec_){
     for(size_t s = 0; s < vec_; s+=(aligned?vec_:1))
-        iss << format("  @%pred{} st.global{}.{} [%pc{} + {}], %rc{}_0{};", i + s, aligned?vv:"", io_dtype, i, dtsize*s, i, aligned?"":vs[s]) << std::endl;
+        iss << format("  @%pred{} st.global{}.{} [%pc{}], %rc{}_0{};", i + s, aligned?vv:"", io_dtype, i + s, i, aligned?"":vs[s]) << std::endl;
     }
     iss << "}" << std::endl;
 
