@@ -48,7 +48,7 @@ public:
   static const size_t Nparams;
 
 public:
-  Pool(DType dtype, PoolType pool_type,
+  Pool(DType in_dtype, DType out_dtype, PoolType pool_type,
        param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
        param_t pad_d, param_t pad_h, param_t pad_w,
        param_t stride_d, param_t stride_h, param_t stride_w,
@@ -56,15 +56,17 @@ public:
   // Execution
   std::string dump(driver::Device const & device, std::string const & name);
   static void check_valid(driver::Device const & device, size_t M, param_t* params, uint8_t* valid);
-  void enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer &O);
+  void enqueue(driver::Kernel& kernel, driver::Stream& queue, driver::Buffer const & I, driver::Buffer &O, float i_scale = 1, float o_scale = 1);
   std::vector<unsigned int> tuning_params() const;
   static double tflops(param_t P, param_t Q, param_t M, param_t K, param_t N, param_t T, param_t R, param_t S, double time);
 
 private:
-  DType dtype_;
+  DType in_dtype_;
+  DType out_dtype_;
   PoolType pool_type_;
   // Shapes
-  param_t C_;
+  param_t Cin_;
+  param_t Cout_;
   param_t D_;
   param_t H_;
   param_t W_;
