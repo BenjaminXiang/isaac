@@ -475,10 +475,8 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     if(in_dtype_ == INT8X4_TYPE){
       for(size_t j = 0; j < vect_in; j++)
       for(size_t i = 0; i < cl0; i += vec_*bc0_)
-      for(size_t s = 0; s < vec_; s++){
+      for(size_t s = 0; s < vec_; s++)
         iss << format("  cvt.rn.f32.s32 %rc{0}_{1}{2}, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
-        iss << format("  div.approx.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %i_scale;", i, j, vs[s]) << std::endl;
-      }
     }
 
     if(pool_type_ == AvgPool){
@@ -492,14 +490,21 @@ std::string Pool::dump(driver::Device const &, std::string const & name){
     }
 
 
-    for(size_t j = 0; j < vect_in; j++)
-    for(size_t i = 0; i < cl0; i += vec_*bc0_)
-    for(size_t s = 0; s < vec_; s++){
-      iss << format("  mul.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %o_scale;", i, j, vs[s]) << std::endl;
+    if(in_dtype_ == INT8X4_TYPE){
+      for(size_t j = 0; j < vect_in; j++)
+      for(size_t i = 0; i < cl0; i += vec_*bc0_)
+      for(size_t s = 0; s < vec_; s++)
+        iss << format("  div.approx.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %i_scale;", i, j, vs[s]) << std::endl;
     }
 
 
     if(out_dtype_ == INT8X4_TYPE){
+      for(size_t j = 0; j < vect_in; j++)
+      for(size_t i = 0; i < cl0; i += vec_*bc0_)
+      for(size_t s = 0; s < vec_; s++){
+        iss << format("  mul.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %o_scale;", i, j, vs[s]) << std::endl;
+      }
+
       iss << std::endl;
       iss << "  /* Pack */" << std::endl;
       for(size_t i = 0; i < cl0; i += vec_*bc0_)

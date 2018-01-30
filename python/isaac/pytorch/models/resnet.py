@@ -21,10 +21,10 @@ class BasicBlock(nn.Module):
 class BottleNeck(nn.Module):
     expansion = 4
 
-    def __init__(self, inplanes, planes, stride=1, downsample=None, dim=2):
-        super(Bottleneck, self).__init__()
-        self.conv1 = sc.ConvType[dim](in_num, out_num, kernel_size=1, bias=True, activation='linear')
-        self.conv2 = sc.ConvType[dim](out_num, out_num, kernel_size=3, stride=stride, padding=1, bias=True, activation='linear')
+    def __init__(self, in_num, out_num, stride=1, downsample=None, dim=2):
+        super(BottleNeck, self).__init__()
+        self.conv1 = sc.ConvType[dim](in_num, out_num, kernel_size=1, bias=True, activation='relu')
+        self.conv2 = sc.ConvType[dim](out_num, out_num, kernel_size=3, stride=stride, padding=1, bias=True, activation='relu')
         self.conv3 = sc.ConvType[dim](out_num, out_num*4, kernel_size=1, bias=True, activation='relu', residual='add')
         self.downsample = downsample
 
@@ -84,6 +84,7 @@ class ResNet(nn.Module):
         for module in self.modules():
             if hasattr(module, 'set_quantizer'):
                 module.set_quantizer(quantizer)
+        self.avgpool.is_last_conv = True
         self.forward(x)
         return self
 
@@ -98,7 +99,7 @@ def convert(model, reference):
 
     # Copy weights
     for i_key, j_key in zip(result_keys, reference_keys):
-        weights = reference_dict[j_key].data.clone()
+        weights = reference_dict[j_key].clone()
         # Transpose weights if necessary
         if(len(weights.size()) == 4):
             weights = weights.permute(1, 2, 3, 0)
@@ -111,8 +112,8 @@ def convert(model, reference):
     for x, y in zip(conv_keys, batch_norm_keys):
         eps = 1e-5
         # Extract scales, mean, variance
-        beta = reference_dict['{}.bias'.format(y)].data.cuda()
-        gamma = reference_dict['{}.weight'.format(y)].data.cuda()
+        beta = reference_dict['{}.bias'.format(y)].cuda()
+        gamma = reference_dict['{}.weight'.format(y)].cuda()
         mean = reference_dict['{}.running_mean'.format(y)].cuda()
         var = reference_dict['{}.running_var'.format(y)].cuda()
         alpha = gamma / torch.sqrt(var + eps)
@@ -142,4 +143,9 @@ pretrained_urls = {
 def resnet18(**kwargs):
     model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs).cuda()
     convert(model, model_zoo.load_url(pretrained_urls['resnet18']))
+    return model
+
+def resnet152(**kwargs):
+    model = ResNet(BottleNeck, [3, 8, 36, 3], **kwargs).cuda()
+    convert(model, model_zoo.load_url(pretrained_urls['resnet152']))
     return model

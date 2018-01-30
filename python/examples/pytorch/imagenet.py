@@ -219,6 +219,15 @@ def resnet18(pretrained=False, **kwargs):
         model.load_state_dict(model_zoo.load_url(model_urls['resnet18']))
     return model
 
+def resnet152(pretrained=False, **kwargs):
+    """Constructs a ResNet-152 model.
+    Args:
+        pretrained (bool): If True, returns a model pre-trained on ImageNet
+    """
+    model = ResNet(Bottleneck, [3, 8, 36, 3], **kwargs)
+    if pretrained:
+        model.load_state_dict(model_zoo.load_url(model_urls['resnet152']))
+    return model
 
 def main():
     global args
@@ -248,16 +257,19 @@ def main():
 
     input, target = next(iter(val_loader))
     input = torch.autograd.Variable(input, volatile=True).cuda()
-    resnet_ref = resnet18(pretrained=True).cuda()
+    resnet_ref = resnet152(pretrained=True).cuda()
     resnet_ref.eval()
-    resnet_sc = isaac.pytorch.models.resnet18()
-    #resnet_sc.quantize(input, approximate=True)
+    resnet_sc = isaac.pytorch.models.resnet152()
+    resnet_sc.quantize(input, approximate=True)
 
     y_ref = resnet_ref(input)
     y_sc = resnet_sc(input)
 
+    #print(y_ref.data[0,0], y_sc.data[0,0])
+    #print(y_ref.data[1,0], y_sc.data[1,0])
+
     print(torch.norm(y_ref - y_sc)/torch.norm(y_ref))
-    #validate(val_loader, model, criterion)
+    validate(val_loader, resnet_sc, criterion)
 
 
 
@@ -273,8 +285,8 @@ def validate(val_loader, model, criterion):
     end = time.time()
     for i, (input, target) in enumerate(val_loader):
         target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
+        input_var = torch.autograd.Variable(input, volatile=True).cuda()
+        target_var = torch.autograd.Variable(target, volatile=True).cuda()
 
         # compute output
         output = model(input_var)

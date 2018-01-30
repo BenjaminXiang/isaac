@@ -41,18 +41,29 @@ int isaac_conv_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *filters, THC
                   const char * residual, THCudaIntTensor *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1);
 
 // Pooling
-int isaac_pool_nd_float(THCudaTensor *inputs, THCudaTensor *outputs,
+int isaac_pool_nd_float_float(THCudaTensor *inputs, THCudaTensor *outputs,
                       const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
-                      size_t quantized,
+                      size_t quantized_in, size_t quantized_out,
+                      float i_scale, float o_scale,
                       size_t stride_d, size_t stride_h, size_t stride_w);
 
-int isaac_pool_nd_int(THCudaIntTensor *inputs, THCudaIntTensor *outputs,
+int isaac_pool_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *outputs,
                       const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
-                      size_t quantized,
+                      size_t quantized_in, size_t quantized_out,
+                      float i_scale, float o_scale,
+                      size_t stride_d, size_t stride_h, size_t stride_w);
+
+
+int isaac_pool_nd_int_float(THCudaIntTensor *inputs, THCudaTensor *outputs,
+                      const char * type,
+                      size_t window_d, size_t window_h, size_t window_w,
+                      size_t pad_d, size_t pad_h, size_t pad_w,
+                      size_t quantized_in, size_t quantized_out,
+                      float i_scale, float o_scale,
                       size_t stride_d, size_t stride_h, size_t stride_w);
 
 

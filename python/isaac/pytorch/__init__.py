@@ -59,23 +59,28 @@ class ConvNdFunction(Function):
         return output
 
 class PoolNdFunction(Function):
-    def __init__(self, type, kernel_size, pad = (0, 0, 0), strides = (1, 1, 1), quantized = False):
+    def __init__(self, type, kernel_size, scale, pad = (0, 0, 0), strides = (1, 1, 1), quantized_in = False, quantized_out = False):
         self.kernel_size = pad_left(3, kernel_size, 1)
         self.pad = pad_left(3, pad, 0)
         self.strides = pad_left(3, strides, 1)
+        self.scale = scale
         self.ffi = cffi.FFI()
-        self.quantized = quantized
+        self.quantized_in = quantized_in
+        self.quantized_out = quantized_out
         self.type = type.encode('utf-8')
-        self.function = {False: isaac_pool_nd_float,
-                         True: isaac_pool_nd_int}[quantized]
+        self.function = {(False, False): isaac_pool_nd_float_float,
+                          (True, False): isaac_pool_nd_int_float,
+                          (True, True): isaac_pool_nd_int_int}[quantized_in, quantized_out]
 
     def forward(self, input):
-        output = input.new()
+        output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
+
         self.function(input, output,
                       self.type,
                       self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
                       self.pad[0], self.pad[1], self.pad[2],
-                      self.quantized,
+                      self.quantized_in, self.quantized_out,
+                      self.scale[0], self.scale[1],
                       self.strides[0], self.strides[1], self.strides[2])
         return output
 
@@ -219,10 +224,14 @@ class Conv3d(ConvNd):
 
 class PoolNd(nn.Module):
 
-    def __init__(self, kernel_size, type, stride, padding):
+    def __init__(self, kernel_size, type, stride, padding, scale = [1., 1.]):
         super(PoolNd, self).__init__()
         self.quantizer = None
-        self.quantized = False
+        self.quantized_in = False
+        self.quantized_out = False
+        self.is_last_conv = False
+        self.is_first_conv = False
+        self.scale = scale
         self.kernel_size = kernel_size
         self.type = type
         self.stride = stride
@@ -233,12 +242,14 @@ class PoolNd(nn.Module):
 
     def forward(self, x):
         # Computations
-        y = PoolNdFunction(self.type, self.kernel_size, pad=self.padding, strides=self.stride, quantized=self.quantized)(x)
+        y = PoolNdFunction(self.type, self.kernel_size, self.scale, pad=self.padding, strides=self.stride, quantized_in=self.quantized_in, quantized_out=self.quantized_out)(x)
         # Quantization if requested
         if self.quantizer:
-            self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
+            self.scale[0] = self.quantizer.history[id(x)]
+            self.scale[1] = self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
             self.quantizer = None
-            self.quantized = True
+            self.quantized_in = not self.is_first_conv
+            self.quantized_out = not self.is_last_conv
         return y
 
 

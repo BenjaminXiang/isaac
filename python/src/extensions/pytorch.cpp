@@ -46,9 +46,10 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, in
                   size_t upsample_d, size_t upsample_h, size_t upsample_w,
                   size_t pad_d, size_t pad_h, size_t pad_w,
                   size_t stride_d, size_t stride_h, size_t stride_w,
-                  THCudaTensor *bias,
+                  THCudaTensor * bias,
                   const char * activation, float alpha,
-                  size_t quantized_in, size_t quantized_out, float iscale, float fscale, float * oscale, float zscale,
+                  size_t quantized_in, size_t quantized_out,
+                  float i_scale, float f_scale, float * o_scale, float z_scale,
                   const char * residual, OUT_TYPE *z, size_t crop_z_d0, size_t crop_z_d1, size_t crop_z_h0, size_t crop_z_h1, size_t crop_z_w0, size_t crop_z_w1)
 {
   int DIM = nDimension(state, inputs) - 2;
@@ -120,25 +121,29 @@ int isaac_conv_nd_impl(IN_TYPE *inputs, IN_TYPE *filters, OUT_TYPE **outputs, in
               I, F, O.data(), num_outputs,
               Bias.get(),
               sc_activation, alpha,
-              iscale, fscale, std::vector<float>(oscale, oscale + num_outputs), zscale,
+              i_scale, f_scale, std::vector<float>(o_scale, o_scale + num_outputs), z_scale,
               sc_residual, Zk*vect_k, crop_z_d0, crop_z_d1, crop_z_h0, crop_z_h1, crop_z_w0, crop_z_w1, Z.get());
 
   return 1;
 }
 
 /* Pooling */
-template<class TYPE>
-int isaac_pool_nd_impl(TYPE *inputs, TYPE *outputs,
+template<class IN_TYPE, class OUT_TYPE>
+int isaac_pool_nd_impl(IN_TYPE *inputs, OUT_TYPE *outputs,
                       const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
-                      size_t quantized,
+                      size_t quantized_in, size_t quantized_out,
+                      float i_scale, float o_scale,
                       size_t stride_d, size_t stride_h, size_t stride_w){
   int DIM = nDimension(state, inputs) - 2;
 
   // Datatype
-  isaac::DType dtype = quantized?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
-  size_t vect_c = quantized?4:1;
+  isaac::DType in_dtype = quantized_in?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+  isaac::DType out_dtype = quantized_out?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+
+  size_t vect_c = quantized_in?4:1;
+  size_t vect_k = quantized_out?4:1;
 
   // Inputs
   size_t N = size(state, inputs, 0);
@@ -156,7 +161,7 @@ int isaac_pool_nd_impl(TYPE *inputs, TYPE *outputs,
   // Create output
   long output_sizes[5];
   output_sizes[0] = N;
-  output_sizes[1] = C;
+  output_sizes[1] = C * vect_c / vect_k;
   if(DIM > 2) output_sizes[2] = M;
   if(DIM > 1) output_sizes[2 + (DIM > 2)] = P;
   if(DIM > 0) output_sizes[2 + (DIM > 2) + (DIM > 1)] = Q;
@@ -168,12 +173,14 @@ int isaac_pool_nd_impl(TYPE *inputs, TYPE *outputs,
   isaac::driver::Buffer O(stream.context(), (CUdeviceptr)storage(state, outputs)->data, false);
 
   // Execute
-  isaac::POOL(stream.context().device(), stream, dtype,
+  isaac::POOL(stream.context().device(), stream,
+              in_dtype, out_dtype,
               get_sc_pool(type),
               C*vect_c, M, P, Q, N, T, R, S, D, H, W,
               pad_d, pad_h, pad_w,
               stride_d, stride_h, stride_w,
-              I, O);
+              I, O,
+              i_scale, o_scale);
 
   return 1;
 }
@@ -224,6 +231,7 @@ int isaac_linear_impl(IN_TYPE *inputs, IN_TYPE *weights, OUT_TYPE *outputs,
   isaac::scalar beta(b, isaac::FLOAT_TYPE);
 
   isaac::GEMM(stream.context().device(), stream, out_dtype, isaac::ISAAC_OP_T, isaac::ISAAC_OP_N, N, M, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, Bias.get());
+  return 1;
 }
 
 
@@ -288,23 +296,36 @@ int isaac_conv_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *filters, THC
 }
 
 /* Pooling */
-int isaac_pool_nd_float(THCudaTensor *inputs, THCudaTensor *outputs,
+int isaac_pool_nd_float_float(THCudaTensor *inputs, THCudaTensor *outputs,
                       const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
-                      size_t quantized,
+                      size_t quantized_in, size_t quantized_out,
+                      float i_scale, float o_scale,
                       size_t stride_d, size_t stride_h, size_t stride_w){
-  return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized, stride_d, stride_h, stride_w);
+  return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized_in, quantized_out, i_scale, o_scale, stride_d, stride_h, stride_w);
 }
 
 
-int isaac_pool_nd_int(THCudaIntTensor *inputs, THCudaIntTensor *outputs,
+int isaac_pool_nd_int_int(THCudaIntTensor *inputs, THCudaIntTensor *outputs,
                       const char * type,
                       size_t window_d, size_t window_h, size_t window_w,
                       size_t pad_d, size_t pad_h, size_t pad_w,
-                      size_t quantized,
+                      size_t quantized_in, size_t quantized_out,
+                      float i_scale, float o_scale,
                       size_t stride_d, size_t stride_h, size_t stride_w){
-  return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized, stride_d, stride_h, stride_w);
+  return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized_in, quantized_out, i_scale, o_scale, stride_d, stride_h, stride_w);
+}
+
+
+int isaac_pool_nd_int_float(THCudaIntTensor *inputs, THCudaTensor *outputs,
+                      const char * type,
+                      size_t window_d, size_t window_h, size_t window_w,
+                      size_t pad_d, size_t pad_h, size_t pad_w,
+                      size_t quantized_in, size_t quantized_out,
+                      float i_scale, float o_scale,
+                      size_t stride_d, size_t stride_h, size_t stride_w){
+  return isaac_pool_nd_impl(inputs, outputs, type, window_d, window_h, window_w, pad_d, pad_h, pad_w, quantized_in, quantized_out, i_scale, o_scale, stride_d, stride_h, stride_w);
 }
 
 
