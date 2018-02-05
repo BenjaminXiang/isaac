@@ -32,14 +32,11 @@ def main():
     val_loader = torch.utils.data.DataLoader(image_folder, batch_size=args.batch_size, shuffle=False, num_workers=args.workers, pin_memory=True)
 
     # Build models
-    model = models.__dict__[args.arch](pretrained=True)
-    model = torch.nn.DataParallel(model).cuda()
-
     input, target = next(iter(val_loader))
     input = torch.autograd.Variable(input, volatile=True).cuda()
-    resnet_ref = models.resnet152(pretrained=True).cuda()
+    resnet_ref = models.__dict__[args.arch](pretrained=True).cuda()
     resnet_ref.eval()
-    resnet_sc = isaac.pytorch.models.resnet152()
+    resnet_sc = isaac.pytorch.models.resnet(args.arch)
     resnet_sc.quantize(input, approximate=True)
 
     # Benchmark

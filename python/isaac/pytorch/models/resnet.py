@@ -18,11 +18,11 @@ class BasicBlock(nn.Module):
         out = self.conv2(out, residual)
         return out
 
-class BottleNeck(nn.Module):
+class Bottleneck(nn.Module):
     expansion = 4
 
     def __init__(self, in_num, out_num, stride=1, downsample=None, dim=2):
-        super(BottleNeck, self).__init__()
+        super(Bottleneck, self).__init__()
         self.conv1 = sc.ConvType[dim](in_num, out_num, kernel_size=1, bias=True, activation='relu')
         self.conv2 = sc.ConvType[dim](out_num, out_num, kernel_size=3, stride=stride, padding=1, bias=True, activation='relu')
         self.conv3 = sc.ConvType[dim](out_num, out_num*4, kernel_size=1, bias=True, activation='relu', residual='add')
@@ -132,20 +132,31 @@ def convert(model, reference):
 
 
 
-pretrained_urls = {
-    'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
-    'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
-    'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
-    'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
-    'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth',
-}
+def resnet(name, **kwargs):
+    pretrained_urls = {
+        'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
+        'resnet34': 'https://download.pytorch.org/models/resnet34-333f7ec4.pth',
+        'resnet50': 'https://download.pytorch.org/models/resnet50-19c8e357.pth',
+        'resnet101': 'https://download.pytorch.org/models/resnet101-5d3b4d8f.pth',
+        'resnet152': 'https://download.pytorch.org/models/resnet152-b121ed2d.pth'
+    }
 
-def resnet18(**kwargs):
-    model = ResNet(BasicBlock, [2, 2, 2, 2], **kwargs).cuda()
-    convert(model, model_zoo.load_url(pretrained_urls['resnet18']))
-    return model
+    blocks = {
+        'resnet18': BasicBlock,
+        'resnet34': BasicBlock,
+        'resnet50': Bottleneck,
+        'resnet101': Bottleneck,
+        'resnet152': Bottleneck
+    }
 
-def resnet152(**kwargs):
-    model = ResNet(BottleNeck, [3, 8, 36, 3], **kwargs).cuda()
-    convert(model, model_zoo.load_url(pretrained_urls['resnet152']))
+    layers = {
+        'resnet18': [2, 2, 2, 2],
+        'resnet34': [3, 4, 6, 3],
+        'resnet50': [3, 4, 6, 3],
+        'resnet101': [3, 4, 23, 3],
+        'resnet152': [3, 8, 36, 3]
+    }
+
+    model = ResNet(blocks[name], layers[name], **kwargs).cuda()
+    convert(model, model_zoo.load_url(pretrained_urls[name]))
     return model

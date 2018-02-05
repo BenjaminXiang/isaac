@@ -105,14 +105,25 @@ class LinearFunction(Function):
 #############################
 class Quantizer:
 
-    def scale(self, x):
-        eps = 1e-5
-        return 127. / (torch.max(torch.abs(x)) + eps)
-        #idxs = [int(rho * len(sorted)) for rho in np.arange(0, 1e-5, 1e-6)]
-        #scales = [127. / sorted[idx] for idx in idxs]
-        #clip = lambda x, scale: torch.round(torch.clamp(x * scale, -128, 127)) / scale
-        #loss = [torch.norm(x - clip(x, scale)) for scale in scales]
-        #return scales[np.argmin(loss)]
+    def scale(self, x, activations):
+
+        def loss(threshold):
+            scale = 127. / threshold
+            q = torch.clamp(x * scale, -128, 127)
+            q = torch.round(q) / scale
+            return torch.mean((x - q)**2)
+
+        # Truncation indices
+        abs_x = torch.abs(x)
+        a, b = torch.min(abs_x), torch.max(abs_x)
+        epsilon = (b - a)*1e-3
+        for i in range(20):
+            c = (a + b) / 2
+            if i > 0 and abs(previous - c) < epsilon:
+                break
+            (a, b) = (c, b) if loss(c) > loss(c + epsilon) else (a, c)
+            previous = c
+        return 127. / c
 
     def __init__(self, approximate):
         self.history = dict()
@@ -127,10 +138,10 @@ class Quantizer:
         if weight.data.size()[0] % 4 == 0 and not is_first_conv:
             quantized_in = True
             scale[0] = self.history[id(x)]
-            scale[1] = self.scale(weight.data)
+            scale[1] = self.scale(weight.data, False)
         if weight.data.size()[-1] % 4 == 0 and not is_last_conv:
             quantized_out = True
-            scale[2][0] = self.history[id(y)] = self.scale(y.data)
+            scale[2][0] = self.history[id(y)] = self.scale(y.data, True)
 
         # Quantize weights
         dim = len(weight.size())
