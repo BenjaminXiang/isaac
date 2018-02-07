@@ -96,7 +96,6 @@ def convert(model, reference):
     reference_keys = [x for x in reference_dict.keys() if x not in batch_norm_keys]
     result_dict = model.state_dict()
     result_keys = [x for x in result_dict.keys() if 'bias' not in x] + ['fc.bias']
-
     extract = lambda x: x.data if isinstance(x, torch.autograd.Variable) else x
 
     # Copy weights

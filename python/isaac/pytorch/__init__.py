@@ -24,8 +24,7 @@ class ConvNdFunction(Function):
         self.residual = '' if residual is None else residual
         self.residual = self.residual.encode('utf-8')
         self.alpha = float(alpha)
-        self.scale = (scale[0], scale[1], tuple(map(float, scale[2])), scale[3])
-        self.num_outputs = len(self.scale[2])
+        self.scale = scale
         self.pad = pad_left(3, pad, 0)
         self.strides = pad_left(3, strides, 1)
         self.upsample = pad_left(3, upsample, 1)
@@ -41,21 +40,19 @@ class ConvNdFunction(Function):
     def forward(self, input, weight, bias, z):
         z = z if z.size() else self.ffi.NULL
         bias = bias if bias.size() else self.ffi.NULL
-        output = tuple(input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor) for i in range(self.num_outputs))
-        T = torch.utils.ffi._torch_to_cffi.get(type(output[0]))
-        p_outputs = self.ffi.new(T + '*[]', [self.ffi.cast(T + '*', x._cdata) for x in output])
-        p_scales = self.ffi.new('float[]', self.scale[2])
-        self.function(input, weight, p_outputs, self.num_outputs,
+        output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
+        T = torch.utils.ffi._torch_to_cffi.get(type(output))
+        outputs = self.ffi.new(T + '*[]', [self.ffi.cast(T + '*', x._cdata) for x in [output]])
+        output_scales = self.ffi.new('float[]', [self.scale[2]])
+        self.function(input, weight, outputs, 1,
                       self.upsample[0], self.upsample[1], self.upsample[2], # Upsample
                       self.pad[0], self.pad[1], self.pad[2], # Pad
                       self.strides[0], self.strides[1], self.strides[2], # Strides
                       bias, # Bias
                       self.activation, self.alpha, # Activation
-                      self.quantized_in, self.quantized_out, self.scale[0], self.scale[1], p_scales, self.scale[3], # Quantization
+                      self.quantized_in, self.quantized_out, self.scale[0], self.scale[1], output_scales, self.scale[3], # Quantization
                       self.residual, z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5]# Crop-cat
                       )
-        if self.num_outputs == 1:
-            return output[0]
         return output
 
 class PoolNdFunction(Function):
@@ -140,7 +137,7 @@ class Quantizer:
 
     def quantize(self, weight, x, y, z, is_first_conv, is_last_conv):
         # Update scales
-        scale = [1., 1., [1.], 1.]
+        scale = [1., 1., 1., 1.]
         quantized_in, quantized_out = False, False
 
         if weight.data.size()[0] % 4 == 0 and not is_first_conv:
@@ -149,7 +146,7 @@ class Quantizer:
             scale[1] = self.scale(weight.data, False)
         if weight.data.size()[-1] % 4 == 0 and not is_last_conv:
             quantized_out = True
-            scale[2][0] = self.history[id(y)] = self.scale(y.data, True)
+            scale[2] = self.history[id(y)] = self.scale(y.data, True)
 
         # Quantize weights
         dim = len(weight.size())
@@ -163,8 +160,8 @@ class Quantizer:
             if self.approximate:
                 scale[3] = self.history[id(z)]
             else:
-                self.module_of[id(z)].scale[2].append(scale[2][0])
-                scale[3] = scale[2][0]
+                self.module_of[id(z)].scale[2] = scale[2]
+                scale[3] = scale[2]
 
         # Quantization done
         return scale, weight, quantized_in, quantized_out
@@ -224,17 +221,17 @@ class ConvNd(nn.modules.conv._ConvNd):
 
 # 1D Conv
 class Conv1d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.], 1.], residual = None):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1., 1.], residual = None):
         super(Conv1d, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), _single(upsample), groups, bias, activation, alpha, scale, residual)
 
 # 2D Conv
 class Conv2d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.], 1.], residual = None):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1., 1.], residual = None):
         super(Conv2d, self).__init__(4, in_channels, out_channels, _pair(kernel_size), _pair(stride), _pair(padding), _pair(dilation), _pair(upsample), groups, bias, activation, alpha, scale, residual)
 
 # 3D Conv
 class Conv3d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., [1.], 1.], residual = None):
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1., 1.], residual = None):
         super(Conv3d, self).__init__(5, in_channels, out_channels, _triple(kernel_size), _triple(stride), _triple(padding), _triple(dilation), _triple(upsample), groups, bias, activation, alpha, scale, residual)
 
 #############################
@@ -326,9 +323,7 @@ class Linear(nn.Linear):
             scale, self.weight, self.quantized_in, self.quantized_out = self.quantizer.quantize(self.weight, x, y, None, self.is_first_conv, self.is_last_conv)
             self.quantizer.module_of.update({id(y): self})
             self.quantizer = None
-            self.scale[0] = scale[0]
-            self.scale[1] = scale[1]
-            self.scale[2] = scale[2][0]
+            self.scale = scale
         return y
 
 
