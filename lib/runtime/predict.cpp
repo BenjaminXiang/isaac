@@ -238,7 +238,7 @@ templates::Pool PoolProfile::predict(driver::Stream& stream, DType in_dtype, DTy
 // GEMM
 GEMMProfile::GEMMProfile(u_char* data): Profile(data, templates::GEMM::Nshapes){}
 
-templates::GEMM GEMMProfile::predict(driver::Stream& stream, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
+templates::GEMM GEMMProfile::predict(driver::Stream& stream, DType in_dtype, DType out_dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
                                      param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc, size_t num_re_evaluate)
 {
   driver::Device const & device = stream.context().device();
@@ -247,13 +247,14 @@ templates::GEMM GEMMProfile::predict(driver::Stream& stream, DType dtype, IsaacO
   std::unique_ptr<scalar> alpha, beta;
   if(num_re_evaluate > 1)
   {
-    C.reset(new driver::Buffer(stream.context(), M*N*size_of(dtype)));
-    A.reset(new driver::Buffer(stream.context(), M*K*size_of(dtype)));
-    B.reset(new driver::Buffer(stream.context(), K*N*size_of(dtype)));
-    alpha.reset(new scalar(1., dtype));
-    beta.reset(new scalar(0., dtype));
+    C.reset(new driver::Buffer(stream.context(), M*N*size_of(out_dtype)));
+    A.reset(new driver::Buffer(stream.context(), M*K*size_of(in_dtype)));
+    B.reset(new driver::Buffer(stream.context(), K*N*size_of(in_dtype)));
+    DType ab_dtype = (out_dtype == INT8X4_TYPE)?FLOAT_TYPE:out_dtype;
+    alpha.reset(new scalar(1., ab_dtype));
+    beta.reset(new scalar(0., ab_dtype));
     benchmark = [&](std::vector<param_t> const& x){
-      templates::GEMM generator(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
+      templates::GEMM generator(in_dtype, out_dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
       std::string src = generator.dump(device, "kernel");
       driver::Module module(stream.context(), src);
@@ -262,9 +263,9 @@ templates::GEMM GEMMProfile::predict(driver::Stream& stream, DType dtype, IsaacO
     };
   }
 
-  std::vector<param_t> shapes{dtype, AT, BT, M, N, K};
+  std::vector<param_t> shapes{out_dtype, AT, BT, M, N, K};
   std::vector<param_t> x = Profile::predict(device, shapes, templates::GEMM::check_valid, benchmark, num_re_evaluate);
-  return templates::GEMM(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
+  return templates::GEMM(in_dtype, out_dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
                          x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
 }
 

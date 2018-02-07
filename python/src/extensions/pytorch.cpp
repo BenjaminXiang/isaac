@@ -188,12 +188,14 @@ int isaac_pool_nd_impl(IN_TYPE *inputs, OUT_TYPE *outputs,
 /* Linear */
 template<typename IN_TYPE, typename OUT_TYPE>
 int isaac_linear_impl(IN_TYPE *inputs, IN_TYPE *weights, OUT_TYPE *outputs,
-                       THCudaTensor *bias,
-                       float a, float b,
-                       size_t quantized_in, size_t quantized_out)
+                      THCudaTensor *bias,
+                      float a, float b,
+                      size_t quantized_in, size_t quantized_out,
+                      float input_scale, float weight_scale, float output_scale)
 {
   isaac::DType in_dtype = quantized_in?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
   isaac::DType out_dtype = quantized_out?isaac::INT8X4_TYPE:isaac::FLOAT_TYPE;
+  size_t vect_k = quantized_in?4:1;
 
 
   // Inputs
@@ -201,9 +203,8 @@ int isaac_linear_impl(IN_TYPE *inputs, IN_TYPE *weights, OUT_TYPE *outputs,
   long Ki = size(state, inputs, 1);
 
   // Filter
-  long Kf = size(state, weights, 1);
-  long N = size(state, weights, 0);
-
+  long Kf = size(state, weights, 0);
+  long N = size(state, weights, 1);
 
   // Check shapes
   if(Ki != Kf)
@@ -230,7 +231,7 @@ int isaac_linear_impl(IN_TYPE *inputs, IN_TYPE *weights, OUT_TYPE *outputs,
   isaac::scalar alpha(a, isaac::FLOAT_TYPE);
   isaac::scalar beta(b, isaac::FLOAT_TYPE);
 
-  isaac::GEMM(stream.context().device(), stream, out_dtype, isaac::ISAAC_OP_T, isaac::ISAAC_OP_N, N, M, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, Bias.get());
+  isaac::GEMM(stream.context().device(), stream, in_dtype, out_dtype, isaac::ISAAC_OP_N, isaac::ISAAC_OP_N, N, M, K*vect_k, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, weight_scale, input_scale, output_scale, Bias.get());
   return 1;
 }
 
@@ -330,10 +331,18 @@ int isaac_pool_nd_int_float(THCudaIntTensor *inputs, THCudaTensor *outputs,
 
 
 /* Linear */
+int isaac_linear_int_float(THCudaIntTensor *inputs, THCudaIntTensor *weights, THCudaTensor *outputs, THCudaTensor *bias,
+                            float alpha, float beta,
+                             size_t quantized_in, size_t quantized_out,
+                             float a_scale, float b_scale, float c_scale){
+  return isaac_linear_impl(inputs, weights, outputs, bias, alpha, beta, quantized_in, quantized_out, a_scale, b_scale, c_scale);
+}
+
 int isaac_linear_float_float(THCudaTensor *inputs, THCudaTensor *weights, THCudaTensor *outputs, THCudaTensor *bias,
                             float alpha, float beta,
-                             size_t quantized_in, size_t quantized_out){
-  return isaac_linear_impl(inputs, weights, outputs, bias, alpha, beta, quantized_in, quantized_out);
+                             size_t quantized_in, size_t quantized_out,
+                             float a_scale, float b_scale, float c_scale){
+  return isaac_linear_impl(inputs, weights, outputs, bias, alpha, beta, quantized_in, quantized_out, a_scale, b_scale, c_scale);
 }
 
 

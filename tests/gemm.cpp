@@ -31,69 +31,172 @@ template<char> inline int matidx(int i, int j, int ld);
 template<> inline int matidx<'T'>(int i, int j, int ld){ return j + i*ld; }
 template<> inline int matidx<'N'>(int i, int j, int ld){ return i + j*ld; }
 
-template<class T, char AT, char BT>
-void cpp_gemm_impl(int M, int N, int K, T* C, int ldc, T alpha, T* A, int lda, T* B, int ldb, T beta){
+template<class T> struct unpack_type { typedef T Type; };
+template<> struct unpack_type<int> { typedef float Type; };
+
+template<class T> struct pack_increment{ enum{ VALUE = 1}; };
+template<> struct pack_increment<int>{ enum{ VALUE = 4}; };
+
+template <class T> T clamp(T x, T lo, T hi){
+  return std::max<T>(lo, std::min<T>(x, hi));
+}
+
+template<class T, class U>
+T pack(U* tmp, U scale);
+
+template<>
+double pack<double, double>(double* tmp, double scale)
+{ return tmp[0]*scale; }
+
+template<>
+float pack<float, float>(float* tmp, float scale)
+{ return tmp[0]*scale; }
+
+template<>
+int pack<int, float>(float* tmp, float scale)
+{
+  int res = 0;
+  for(int i = 0; i < 4; i++){
+    int8_t clamped = std::round(clamp(tmp[i]*scale, (float)-128, (float)127));
+    res |= (clamped & 0xFF) << (8*i);
+  }
+  return res;
+}
+
+
+float* unpack(float* ptr, float value, float scale)
+{
+  *ptr = value/scale;
+  return ptr;
+}
+
+float* unpack(float* ptr, int value, float scale)
+{
+  for(int i = 0; i < 4; i++){
+    int shifted = (value >> (8*i) & 0xff);
+    ptr[i] = ((float)(*(int8_t*)(&shifted)))/scale;
+  }
+  return ptr;
+}
+
+
+template<class T>
+inline T dot(T x, T y, T z)
+{ return std::fma(x, y, z); }
+
+inline int dot(int x, int y, int z){
+  int res = 0;
+  for(int i = 0; i < 4; i++){
+    int32_t a = ((x >> (8*i)) & 0x000000FF);
+    int32_t b = ((y >> (8*i)) & 0x000000FF);
+    res +=  (*(int8_t*)(&a)) * (*(int8_t*)(&b));
+  }
+  return res + z;
+}
+
+
+
+template<class IN_DTYPE, class OUT_DTYPE, class UNPACK_DTYPE, char AT, char BT>
+void cpp_gemm_impl(int M, int N, int K, OUT_DTYPE* C, int ldc, UNPACK_DTYPE alpha, IN_DTYPE* A, int lda, IN_DTYPE* B, int ldb, UNPACK_DTYPE beta, UNPACK_DTYPE a_scale, UNPACK_DTYPE b_scale, UNPACK_DTYPE c_scale)
+{
+  static const int PACK_IN = pack_increment<IN_DTYPE>::VALUE;
+  static const int PACK_OUT = pack_increment<OUT_DTYPE>::VALUE;
+  UNPACK_DTYPE accs[PACK_OUT];
+  K /= PACK_IN;
   for(int i = 0; i < M; ++i)
-    for(int j = 0; j < N; ++j){
-      T acc = 0;
-      for(int k = 0; k < K; ++k)
-        acc += A[matidx<AT>(i, k, lda)]*B[matidx<BT>(k, j, ldb)];
-      C[i + j*ldc] = alpha*acc + ((beta!=0)?beta*C[i + j*ldc]:0);
+  for(int j = 0; j < N; ++j){
+    // Initialize accumulators
+    for(int32_t jj = 0; jj < PACK_OUT; ++jj)
+      accs[jj] = 0;
+    // Accumulate
+    for(int32_t jj = 0; jj < PACK_OUT; ++jj)
+    for(int k = 0; k < K; ++k){
+      IN_DTYPE a = A[matidx<AT>(i, k, lda)];
+      IN_DTYPE b = B[matidx<BT>(k, j*PACK_OUT + jj, ldb)];
+      accs[jj] = dot(a, b, accs[jj]);
+    }
+    // Rescale
+    for(int32_t jj = 0; jj < PACK_OUT; ++jj){
+      accs[jj] /= (a_scale*b_scale);
+      accs[jj] =  alpha*accs[jj] + ((beta!=0)?beta*C[i + j*ldc]:0);
+    }
+    // Write Back
+    C[i + j*ldc] = pack<OUT_DTYPE>(accs, c_scale);
   }
 }
 
-template<class T>
-void cpp_gemm(int M, int N, int K, T* C, int ldc, T alpha, T* A, int lda, T* B, int ldb, T beta, char AT, char BT){
-  if(AT=='N' && BT=='N') cpp_gemm_impl<T, 'N','N'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta);
-  if(AT=='T' && BT=='N') cpp_gemm_impl<T, 'T','N'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta);
-  if(AT=='N' && BT=='T') cpp_gemm_impl<T, 'N','T'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta);
-  if(AT=='T' && BT=='T') cpp_gemm_impl<T, 'T','T'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta);
+template<class IN_DTYPE, class OUT_DTYPE, class UNPACK_DTYPE>
+void cpp_gemm(int M, int N, int K, OUT_DTYPE* C, int ldc, UNPACK_DTYPE alpha, IN_DTYPE* A, int lda, IN_DTYPE* B, int ldb, UNPACK_DTYPE beta, char AT, char BT, UNPACK_DTYPE a_scale, UNPACK_DTYPE b_scale, UNPACK_DTYPE c_scale)
+{
+  if(AT=='N' && BT=='N') cpp_gemm_impl<IN_DTYPE, OUT_DTYPE, UNPACK_DTYPE, 'N','N'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta, a_scale, b_scale, c_scale);
+  if(AT=='T' && BT=='N') cpp_gemm_impl<IN_DTYPE, OUT_DTYPE, UNPACK_DTYPE, 'T','N'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta, a_scale, b_scale, c_scale);
+  if(AT=='N' && BT=='T') cpp_gemm_impl<IN_DTYPE, OUT_DTYPE, UNPACK_DTYPE, 'N','T'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta, a_scale, b_scale, c_scale);
+  if(AT=='T' && BT=='T') cpp_gemm_impl<IN_DTYPE, OUT_DTYPE, UNPACK_DTYPE, 'T','T'>(M, N, K, C, ldc, alpha, A, lda, B, ldb, beta, a_scale, b_scale, c_scale);
 }
 
-template<class DTYPE>
+template<class T>
+bool abs_cmp(T a, T b)
+{ return std::abs(a) < std::abs(b);}
+
+template<class IN_DTYPE, class OUT_DTYPE>
 void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::IsaacOperation_t BT, int32_t M, int32_t N, int32_t K){
-  sc::DType dtype = sc::to_DType<DTYPE>::value;
-  size_t dtsize = sc::size_of(dtype);
+  typedef typename unpack_type<OUT_DTYPE>::Type UNPACK_DTYPE;
 
-  //Shapes
-  int32_t AS0 = M, AS1 = K;
-  int32_t BS0 = K, BS1 = N;
-  if(AT==sc::ISAAC_OP_T) std::swap(AS0, AS1);
-  if(BT==sc::ISAAC_OP_T) std::swap(BS0, BS1);
-  int32_t ldc = M, lda = AS0, ldb = BS0;
+  sc::DType in_dtype = sc::to_DType<IN_DTYPE>::value;
+  sc::DType out_dtype = sc::to_DType<OUT_DTYPE>::value;
+  sc::DType ab_dtype = (out_dtype==sc::INT8X4_TYPE)?sc::FLOAT_TYPE:out_dtype;
+
+  static const int PACK_IN = pack_increment<IN_DTYPE>::VALUE;
+  static const int PACK_OUT = pack_increment<OUT_DTYPE>::VALUE;
+
+  size_t in_dtsize = sc::size_of(in_dtype);
+  size_t out_dtsize = sc::size_of(out_dtype);
+
+  // Strides
+  int32_t ldc = M;
+  int32_t lda = (AT==sc::ISAAC_OP_N)?M : K / PACK_IN;
+  int32_t ldb = (BT==sc::ISAAC_OP_N)?K / PACK_IN : N;
   int32_t offc = 0, offa = 0, offb = 0;
-  DTYPE alpha = 1., beta = 3.2;
-  sc::scalar sc_alpha(alpha, dtype), sc_beta(beta, dtype);
 
-  //Initialize Buffers
-  drv::Buffer C(ctx, M*N*dtsize);
-  drv::Buffer A(ctx, M*K*dtsize);
-  drv::Buffer B(ctx, K*N*dtsize);
-  std::vector<DTYPE> iC(M*N);
-  std::vector<DTYPE> iA(M*K);
-  std::vector<DTYPE> iB(K*N);
-  std::vector<DTYPE> rC(M*N);
+  // Initialize Buffers
+  std::vector<OUT_DTYPE> iC(M * N / PACK_OUT);
+  std::vector<IN_DTYPE> iA(M * K / PACK_IN);
+  std::vector<IN_DTYPE> iB(K * N / PACK_IN);
+  std::vector<OUT_DTYPE> rC(M * N / PACK_OUT);
+
+  drv::Buffer C(ctx, iC.size()*out_dtsize);
+  drv::Buffer A(ctx, iA.size()*in_dtsize);
+  drv::Buffer B(ctx, iB.size()*in_dtsize);
+
+  // Scales
   srand(0);
-  for(size_t i = 0; i < iA.size(); ++i) iA[i] = (float)rand()/RAND_MAX;
-  for(size_t i = 0; i < iB.size(); ++i) iB[i] = (float)rand()/RAND_MAX;
+  for(size_t i = 0; i < iA.size(); ++i) iA[i] = (in_dtype==sc::INT8X4_TYPE)?rand():(float)rand()/RAND_MAX;
+  for(size_t i = 0; i < iB.size(); ++i) iB[i] = (in_dtype==sc::INT8X4_TYPE)?rand():(float)rand()/RAND_MAX;
+  UNPACK_DTYPE a_scale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(iA.begin(), iA.end(), abs_cmp<IN_DTYPE>)):1;
+  UNPACK_DTYPE b_scale = (in_dtype==sc::INT8X4_TYPE)?((float)127 / *std::max_element(iB.begin(), iB.end(), abs_cmp<IN_DTYPE>)):1;
+  UNPACK_DTYPE c_scale = (out_dtype==sc::INT8X4_TYPE)?((float)127 / (0.25*K)):1;
+  UNPACK_DTYPE alpha = 1., beta = 0.;
+  sc::scalar sc_alpha(alpha, ab_dtype), sc_beta(beta, ab_dtype);
 
+
+  // Initialize buffers
   drv::Stream stream(ctx);
-  stream.write(C, true, 0, M*N*dtsize, iC.data());
-  stream.write(A, true, 0, M*K*dtsize, iA.data());
-  stream.write(B, true, 0, K*N*dtsize, iB.data());
+  stream.write(C, true, 0, iC);
+  stream.write(A, true, 0, iA);
+  stream.write(B, true, 0, iB);
 
   //Ground truth
   char cuAT = (AT==sc::ISAAC_OP_T)?'T':'N';
   char cuBT = (BT==sc::ISAAC_OP_T)?'T':'N';
-  cpp_gemm<DTYPE>(M, N, K, rC.data(), ldc, (DTYPE)alpha, iA.data(), lda, iB.data(), ldb, (DTYPE)beta, cuAT, cuBT);
+  cpp_gemm<IN_DTYPE, OUT_DTYPE>(M, N, K, rC.data(), ldc, alpha, iA.data(), lda, iB.data(), ldb, beta, cuAT, cuBT, a_scale, b_scale, c_scale);
 
   //ISAAC results
-  std::vector<DTYPE> hC(M*N);
-  sc::GEMM(ctx.device(), stream, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, sc_alpha, A, B, sc_beta, C);
-  stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
-  if(!is_correct(hC, rC, max_rounding_error(DTYPE(K))))
+  std::vector<OUT_DTYPE> hC(M*N);
+  sc::GEMM(ctx.device(), stream, in_dtype, out_dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, sc_alpha, A, B, sc_beta, C, a_scale, b_scale, c_scale);
+  stream.read(C, true, 0, hC);
+  if(!is_correct(hC, rC, 1e-4))
     exit(EXIT_FAILURE);
-  stream.write(C, true, 0, M*N*dtsize, iC.data());
+  stream.write(C, true, 0, iC);
 
   std::vector<int> rv = {1, 2, 4};
   std::vector<int> rl = {1, 8};
@@ -101,7 +204,7 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
   std::vector<int> rgrid = {1, 8};
   std::vector<int> r1 = {1};
   for(auto x: sc::cpp::cartesian({rv, rl, rl, rl, rs, r1, rs, rl, rl, rl, rl, rs, rl, rgrid})){
-    isaac::templates::GEMM gemm(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
+    isaac::templates::GEMM gemm(in_dtype, out_dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc,
                                 x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
     //Compile
     std::string src;
@@ -114,27 +217,25 @@ void do_test(sc::driver::Context const & ctx, sc::IsaacOperation_t AT, sc::Isaac
     drv::Kernel kernel(program, "gemm");
 
     //Launch
-    gemm.enqueue(kernel, stream, sc_alpha, A, B, sc_beta, C);
+    gemm.enqueue(kernel, stream, sc_alpha, A, B, sc_beta, C, a_scale, b_scale, c_scale);
     stream.synchronize();
 
     //Test
-    stream.read(C, true, 0, M*N*dtsize, (void*)hC.data());
-    stream.write(C, true, 0, M*N*dtsize, iC.data());
-    size_t depth = x[11]*x[12]*x[13];
-    double eps = max_rounding_error(DTYPE(K/depth))*depth;
-    if(!is_correct(hC, rC, eps))
+    stream.read(C, true, 0, hC);
+    stream.write(C, true, 0, iC);
+    if(!is_correct(hC, rC, 1e-4))
       exit(EXIT_FAILURE);
   }
 }
 
-template<class DTYPE>
+template<class IN_DTYPE, class OUT_DTYPE>
 int do_test(sc::driver::Context const & ctx, std::string const & prefix,
             size_t M, size_t N, size_t K,
             sc::IsaacOperation_t AT, sc::IsaacOperation_t BT)
 {
 
   std::cout << "(" << M << ", " << N << ", " << K << ", " << AT << ", " << BT << ") [" << prefix << "]" << std::endl;
-  do_test<DTYPE>(ctx, AT, BT, M, N, K);
+  do_test<IN_DTYPE, OUT_DTYPE>(ctx, AT, BT, M, N, K);
   return EXIT_SUCCESS;
 }
 
@@ -146,27 +247,28 @@ int main(){
   std::cout << "GEMM:" << std::endl;
   std::cout << "===============" << std::endl;
   std::cout << "---------------" << std::endl;
-  do_test<float>(ctx, "core, float", 67, 83, 673, _N, _N);
-  do_test<float>(ctx, "core, float", 67, 83, 673, _N, _T);
-  do_test<float>(ctx, "core, float", 67, 83, 673, _T, _N);
-  do_test<float>(ctx, "core, float", 67, 83, 673, _T, _T);
-  do_test<float>(ctx, "core, float", 1, 83, 673, _N, _N);
-  do_test<float>(ctx, "core, float", 1, 83, 673, _N, _T);
-  do_test<float>(ctx, "core, float", 1, 83, 673, _T, _N);
-  do_test<float>(ctx, "core, float", 1, 83, 673, _T, _T);
-  do_test<float>(ctx, "core, float", 67, 1, 673, _N, _N);
-  do_test<float>(ctx, "core, float", 67, 1, 673, _N, _T);
-  do_test<float>(ctx, "core, float", 67, 1, 673, _T, _N);
-  do_test<float>(ctx, "core, float", 67, 1, 673, _T, _T);
-  do_test<float>(ctx, "core, float", 67, 83, 1, _N, _N);
-  do_test<float>(ctx, "core, float", 67, 83, 1, _N, _T);
-  do_test<float>(ctx, "core, float", 67, 83, 1, _T, _N);
-  do_test<float>(ctx, "core, float", 67, 83, 1, _T, _T);
-  do_test<double>(ctx, "core, double", 67, 83, 673, _N, _N);
-  do_test<double>(ctx, "core, double", 67, 83, 673, _N, _T);
-  do_test<double>(ctx, "core, double", 67, 83, 673, _T, _N);
-  do_test<double>(ctx, "core, double", 67, 83, 673, _T, _T);
-  do_test<float>(ctx, "core + vectorized, float", 64, 96, 640, _N, _N);
-  do_test<double>(ctx, "core + vectorized, double", 64, 96, 640, _N, _N);
+  do_test<int, float>(ctx, "int8x4 + dequantize", 67, 83, 640, _N, _N);
+  do_test<float, float>(ctx, "core, float", 67, 83, 673, _N, _N);
+  do_test<float, float>(ctx, "core, float", 67, 83, 673, _N, _T);
+  do_test<float, float>(ctx, "core, float", 67, 83, 673, _T, _N);
+  do_test<float, float>(ctx, "core, float", 67, 83, 673, _T, _T);
+  do_test<float, float>(ctx, "core, float", 1, 83, 673, _N, _N);
+  do_test<float, float>(ctx, "core, float", 1, 83, 673, _N, _T);
+  do_test<float, float>(ctx, "core, float", 1, 83, 673, _T, _N);
+  do_test<float, float>(ctx, "core, float", 1, 83, 673, _T, _T);
+  do_test<float, float>(ctx, "core, float", 67, 1, 673, _N, _N);
+  do_test<float, float>(ctx, "core, float", 67, 1, 673, _N, _T);
+  do_test<float, float>(ctx, "core, float", 67, 1, 673, _T, _N);
+  do_test<float, float>(ctx, "core, float", 67, 1, 673, _T, _T);
+  do_test<float, float>(ctx, "core, float", 67, 83, 1, _N, _N);
+  do_test<float, float>(ctx, "core, float", 67, 83, 1, _N, _T);
+  do_test<float, float>(ctx, "core, float", 67, 83, 1, _T, _N);
+  do_test<float, float>(ctx, "core, float", 67, 83, 1, _T, _T);
+  do_test<double, double>(ctx, "core, double", 67, 83, 673, _N, _N);
+  do_test<double, double>(ctx, "core, double", 67, 83, 673, _N, _T);
+  do_test<double, double>(ctx, "core, double", 67, 83, 673, _T, _N);
+  do_test<double, double>(ctx, "core, double", 67, 83, 673, _T, _T);
+  do_test<float, float>(ctx, "core + vectorized, float", 64, 96, 640, _N, _N);
+  do_test<double, double>(ctx, "core + vectorized, double", 64, 96, 640, _N, _N);
   std::cout << "---------------" << std::endl;
 }

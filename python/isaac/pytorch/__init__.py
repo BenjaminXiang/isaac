@@ -86,18 +86,22 @@ class PoolNdFunction(Function):
 
 class LinearFunction(Function):
 
-    def __init__(self):
-        self.function = isaac_linear_float_float
+    def __init__(self, scale, quantized_in = False, quantized_out = False):
         self.alpha = 1.
         self.beta = 0.
-        self.quantized_in = False
-        self.quantized_out = False
+        self.scale = scale
+        self.quantized_in = quantized_in
+        self.quantized_out = quantized_out
+        self.function = {(False, False): isaac_linear_float_float,
+                          (True, False): isaac_linear_int_float}[self.quantized_in, self.quantized_out]
+
 
     def forward(self, input, weight, bias):
-        output = input.new()
+        output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
         self.function(input, weight, output, bias,
                       self.alpha, self.beta,
-                      self.quantized_in, self.quantized_out)
+                      self.quantized_in, self.quantized_out,
+                      self.scale[0], self.scale[1], self.scale[2])
         return output
 
 #############################
@@ -106,6 +110,10 @@ class LinearFunction(Function):
 class Quantizer:
 
     def scale(self, x, activations):
+        if activations:
+            h_x, edges = np.histogram(np.abs(x.cpu().numpy()), bins = 2048)
+            idx = np.where(h_x == 0)[0][0]
+            return 127. / edges[idx + 1]
 
         def loss(threshold):
             scale = 127. / threshold
@@ -298,11 +306,29 @@ class AvgPool3d(PoolNd):
 
 class Linear(nn.Linear):
 
-    def __init__(self, in_features, out_features, bias=True):
+    def __init__(self, in_features, out_features, bias=True, scale = [1., 1., 1.]):
         super(Linear, self).__init__(in_features, out_features, bias)
+        self.scale = scale
+        self.is_first_conv = False
+        self.is_last_conv = False
+        self.quantizer = None
+        self.quantized_in = False
+        self.quantized_out = False
+        self.weight.data = self.weight.data.permute(1, 0)
+
+    def set_quantizer(self, quantizer):
+        self.quantizer = quantizer
 
     def forward(self, x):
-        y = LinearFunction()(x, self.weight, self.bias)
+        y = LinearFunction(self.scale, self.quantized_in, self.quantized_out)(x, self.weight, self.bias)
+        # Quantize if requested
+        if self.quantizer:
+            scale, self.weight, self.quantized_in, self.quantized_out = self.quantizer.quantize(self.weight, x, y, None, self.is_first_conv, self.is_last_conv)
+            self.quantizer.module_of.update({id(y): self})
+            self.quantizer = None
+            self.scale[0] = scale[0]
+            self.scale[1] = scale[1]
+            self.scale[2] = scale[2][0]
         return y
 
 

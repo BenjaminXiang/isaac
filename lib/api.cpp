@@ -25,20 +25,23 @@
 namespace isaac{
 
 void GEMM(driver::Device const &, driver::Stream & stream,
-          DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
+          DType in_dtype, DType out_dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
           param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
-          scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C, const driver::Buffer *bias,
+          scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C,
+          float a_scale, float b_scale, float c_scale,
+          const driver::Buffer *bias,
           templates::GEMM* generator)
 {
-  typedef std::tuple<driver::Stream, DType,IsaacOperation_t, IsaacOperation_t, std::vector<param_t>> key_type;
+  typedef std::tuple<driver::Stream, DType, DType, IsaacOperation_t, IsaacOperation_t, std::vector<param_t>> key_type;
   // Build the generator if necessary
   static cpp::CachedMap<key_type, std::shared_ptr<templates::GEMM>> inference([&](key_type const & key){
     driver::Stream & stream = (driver::Stream&)std::get<0>(key);
-    DType dtype = std::get<1>(key);
-    IsaacOperation_t AT = std::get<2>(key), BT = std::get<3>(key);
+    DType in_dtype = std::get<1>(key);
+    DType out_dtype = std::get<2>(key);
+    IsaacOperation_t AT = std::get<3>(key), BT = std::get<4>(key);
     runtime::GEMMProfile* profile = (runtime::GEMMProfile*)runtime::database.at({stream.context().device().architecture(), runtime::GEMM}).get();
-    std::vector<param_t> const & x = std::get<4>(key);
-    templates::GEMM result = profile->predict(stream, dtype, AT, BT, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+    std::vector<param_t> const & x = std::get<5>(key);
+    templates::GEMM result = profile->predict(stream, in_dtype, out_dtype, AT, BT, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
     return std::make_shared<templates::GEMM>(result);
   });
 
@@ -51,8 +54,8 @@ void GEMM(driver::Device const &, driver::Stream & stream,
 
   //Retrieve profile/kernel and execute
   if(generator == NULL)
-    generator = inference.get(key_type(stream, dtype, AT, BT, {M, N, K, offa, lda, offb, ldb, offc, ldc})).get();
-  generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream, alpha, A, B, beta, C, bias);
+    generator = inference.get(key_type(stream, in_dtype, out_dtype, AT, BT, {M, N, K, offa, lda, offb, ldb, offc, ldc})).get();
+  generator->enqueue(*kernels.get(std::make_pair(stream, generator)), stream, alpha, A, B, beta, C, a_scale, b_scale, c_scale, bias);
 
 }
 

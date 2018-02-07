@@ -84,7 +84,7 @@ class ResNet(nn.Module):
         for module in self.modules():
             if hasattr(module, 'set_quantizer'):
                 module.set_quantizer(quantizer)
-        self.avgpool.is_last_conv = True
+        self.fc.is_last_conv = True
         self.forward(x)
         return self
 
@@ -97,10 +97,14 @@ def convert(model, reference):
     result_dict = model.state_dict()
     result_keys = [x for x in result_dict.keys() if 'bias' not in x] + ['fc.bias']
 
+    extract = lambda x: x.data if isinstance(x, torch.autograd.Variable) else x
+
     # Copy weights
     for i_key, j_key in zip(result_keys, reference_keys):
-        weights = reference_dict[j_key].clone()
+        weights = extract(reference_dict[j_key]).clone()
         # Transpose weights if necessary
+        if(len(weights.size()) == 2):
+            weights = weights.permute(1, 0)
         if(len(weights.size()) == 4):
             weights = weights.permute(1, 2, 3, 0)
         result_dict[i_key] = weights
@@ -112,10 +116,10 @@ def convert(model, reference):
     for x, y in zip(conv_keys, batch_norm_keys):
         eps = 1e-5
         # Extract scales, mean, variance
-        beta = reference_dict['{}.bias'.format(y)].cuda()
-        gamma = reference_dict['{}.weight'.format(y)].cuda()
-        mean = reference_dict['{}.running_mean'.format(y)].cuda()
-        var = reference_dict['{}.running_var'.format(y)].cuda()
+        beta = extract(reference_dict['{}.bias'.format(y)]).cuda()
+        gamma = extract(reference_dict['{}.weight'.format(y)]).cuda()
+        mean = extract(reference_dict['{}.running_mean'.format(y)]).cuda()
+        var = extract(reference_dict['{}.running_var'.format(y)]).cuda()
         alpha = gamma / torch.sqrt(var + eps)
         # Adjust conv weights/bias
         conv_bias = result_dict['{}.bias'.format(x)]

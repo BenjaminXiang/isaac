@@ -58,7 +58,7 @@ void export_templates(py::module&& m){
 
 
   py::class_<tpt::GEMM>(m, "GEMM")
-      .def(py::init<sc::DType,sc::IsaacOperation_t,sc::IsaacOperation_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
+      .def(py::init<sc::DType,sc::DType,sc::IsaacOperation_t,sc::IsaacOperation_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
                     param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t>())
       .def("dump", &tpt::GEMM::dump)
       .def("enqueue", &tpt::GEMM::enqueue)

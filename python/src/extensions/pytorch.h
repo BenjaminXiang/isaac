@@ -68,10 +68,17 @@ int isaac_pool_nd_int_float(THCudaIntTensor *inputs, THCudaTensor *outputs,
 
 
 // Linear
+int isaac_linear_int_float(THCudaIntTensor *inputs, THCudaIntTensor *weights, THCudaTensor *outputs,
+                           THCudaTensor *bias,
+                           float alpha, float beta,
+                           size_t quantized_in, size_t quantized_out,
+                           float a_scale, float b_scale, float c_scale);
+
 int isaac_linear_float_float(THCudaTensor *inputs, THCudaTensor *weights, THCudaTensor *outputs,
                              THCudaTensor *bias,
-                            float alpha, float beta,
-                            size_t quantized_in, size_t quantized_out);
+                             float alpha, float beta,
+                             size_t quantized_in, size_t quantized_out,
+                             float a_scale, float b_scale, float c_scale);
 
 // Packing
 int isaac_pack_nd(THCudaTensor* inputs, THCudaIntTensor* outputs, float a, float b);

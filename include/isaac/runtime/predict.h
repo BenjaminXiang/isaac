@@ -135,7 +135,7 @@ public:
 class GEMMProfile: public Profile{
 public:
   GEMMProfile(u_char* data);
-  templates::GEMM predict(driver::Stream& stream, DType dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
+  templates::GEMM predict(driver::Stream& stream, DType in_dtype, DType out_dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
                           param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc, size_t num_re_evaluate = 1);
 };
 
