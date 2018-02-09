@@ -49,6 +49,9 @@ class ResNet(nn.Module):
         self.layer4 = self._make_layer(block, 512, layers[3], stride=2)
         self.avgpool = sc.AvgPool2d(kernel_size=7, stride=1)
         self.fc = sc.Linear(512 * block.expansion, num_classes)
+        # Define first and last layer (for conversion to/from int8x4)
+        self.conv1.is_first = True
+        self.fc.is_last = True
         # Use bias initialized to zero instead of no-bias because batch-norm will be folded
         for x in self.modules():
             if isinstance(x, sc.ConvNd):
@@ -78,15 +81,6 @@ class ResNet(nn.Module):
         x = x.view(x.size(0), -1)
         x = self.fc(x)
         return x
-
-    def quantize(self, x, approximate = True):
-        quantizer = sc.Quantizer(approximate)
-        for module in self.modules():
-            if hasattr(module, 'set_quantizer'):
-                module.set_quantizer(quantizer)
-        self.fc.is_last_conv = True
-        self.forward(x)
-        return self
 
 
 

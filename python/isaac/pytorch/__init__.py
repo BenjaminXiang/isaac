@@ -106,66 +106,128 @@ class LinearFunction(Function):
 #############################
 class Quantizer:
 
-    def scale(self, x, activations):
+    def scale(self, x, activations, bins = None):
+        data = x
+
         if activations:
-            h_x, edges = np.histogram(np.abs(x.cpu().numpy()), bins = 2048)
-            idx = np.where(h_x == 0)[0][0]
-            return 127. / edges[idx + 1]
+            mids = bins[:-1] + np.diff(bins)/2
+            # Compute CDF
+            cdf = np.cumsum(x)
+            cdf = cdf / cdf[-1]
+            # Generate data
+            n_samples = int(1e6)
+            values = np.random.rand(n_samples)
+            value_bins = np.searchsorted(cdf, values)
+            data = torch.Tensor(mids[value_bins]).cuda()
+
+
 
         def loss(threshold):
             scale = 127. / threshold
-            q = torch.clamp(x * scale, -128, 127)
+            q = torch.clamp(data * scale, -128, 127)
             q = torch.round(q) / scale
-            return torch.mean((x - q)**2)
+            return torch.mean((data - q)**2)
 
         # Truncation indices
-        abs_x = torch.abs(x)
-        a, b = torch.min(abs_x), torch.max(abs_x)
-        epsilon = (b - a)*1e-3
-        for i in range(20):
+        abs_data = torch.abs(data)
+        a, b = torch.min(abs_data), torch.max(abs_data)
+        epsilon = (b - a)*1e-2
+        for i in range(16):
             c = (a + b) / 2
-            if i > 0 and abs(previous - c) < epsilon:
-                break
             (a, b) = (c, b) if loss(c) > loss(c + epsilon) else (a, c)
             previous = c
         return 127. / c
 
-    def __init__(self, approximate):
+    def __init__(self, stages = 3):
         self.history = dict()
-        self.module_of = dict()
-        self.approximate = approximate
+        self.stages = stages
 
-    def quantize(self, weight, x, y, z, is_first_conv, is_last_conv):
-        # Update scales
-        scale = [1., 1., 1., 1.]
-        quantized_in, quantized_out = False, False
 
-        if weight.data.size()[0] % 4 == 0 and not is_first_conv:
-            quantized_in = True
-            scale[0] = self.history[id(x)]
-            scale[1] = self.scale(weight.data, False)
-        if weight.data.size()[-1] % 4 == 0 and not is_last_conv:
-            quantized_out = True
-            scale[2] = self.history[id(y)] = self.scale(y.data, True)
 
-        # Quantize weights
-        dim = len(weight.size())
-        if quantized_in:
-            tmp = weight.data*scale[1]
-            weight.data = PackNd(weight.data.permute(*from_chwn_idx(dim)).clone(), scale[1], 0.0)
-            weight.data = weight.data.permute(*to_chwn_idx(dim)).clone()
+class Quantizable:
 
-        # Handle skip connections
-        if z is not None:
-            if self.approximate:
-                scale[3] = self.history[id(z)]
+    def __init__(self, weight = None):
+        self.quantized_in = False
+        self.quantized_out = False
+        self.is_last = False
+        self.is_first = False
+        self.weight = weight
+        self.state = None
+        self.quantizer = None
+        self.scale = [1., 1., 1.] + ([1.] if self.weight is not None else [])
+
+
+    def prepare_quantization(self, quantizer):
+        can_quantize_in = True if self.weight is None else self.weight.data.size()[0] % 4 == 0
+        can_quantize_out = True if self.weight is None else self.weight.data.size()[-1] % 4 == 0
+        self.state = {'quantized_in' : can_quantize_in and not self.is_first,
+                      'quantized_out': can_quantize_out and not self.is_last,
+                      'min': float('inf'), 'max': float('-inf'), 'scale': [],
+                      'stage': 0}
+        self.quantizer = quantizer
+
+    def increment_stage(self):
+        if self.state['stage'] == 0:
+            self.state['bins'] = np.linspace(self.state['min'], self.state['max'], 2049)
+            self.state['histogram'] = np.zeros(2048)
+        self.state['stage'] += 1
+
+    def update(self, x, y, z):
+        if self.state and self.state['stage'] == 0:
+            y_abs = torch.abs(y.data)
+            self.state['min'] = min(self.state['min'], torch.min(y_abs))
+            self.state['max'] = max(self.state['max'], torch.max(y_abs))
+
+        if self.state and self.state['stage'] == 1:
+            # Update histogram
+            if self.state['quantized_out']:
+                y_abs = torch.abs(y.data)
+                self.state['histogram'] += np.histogram(y_abs.cpu().numpy(), bins = self.state['bins'])[0]
+
+
+        if self.state and self.state['stage'] == 2:
+            # Activate or not quantization
+            self.quantized_in = self.state['quantized_in']
+            self.quantized_out = self.state['quantized_out']
+
+            # Compute scales
+            self.scale[0] = self.quantizer.history[id(x)] if self.quantized_in else 1.
+            self.scale[-1] = self.quantizer.history[id(z)] if z is not None else 1.
+            if self.quantized_out:
+                scale = self.quantizer.scale(self.state['histogram'], True, bins = self.state['bins'])
+                self.scale[-2] = self.quantizer.history[id(y)] = scale
             else:
-                self.module_of[id(z)].scale[2] = scale[2]
-                scale[3] = scale[2]
+                self.scale[-2] = 1.
 
-        # Quantization done
-        return scale, weight, quantized_in, quantized_out
+            # Scale weights
+            if self.quantized_in and self.weight is not None:
+                self.scale[1] = self.quantizer.scale(self.weight.data, False)
+                transpose_pack(self.weight, self.scale[1])
 
+            # Reset
+            self.state = None
+            self.quantizer = None
+
+
+
+def quantize(model, loader, num_iter, idx = 0):
+    def do_on_quantizable(fn):
+        for module in model.modules():
+            if isinstance(module, Quantizable):
+                fn(module)
+
+    # Prepare quantization
+    quantizer = Quantizer()
+    do_on_quantizable(lambda x: x.prepare_quantization(quantizer))
+
+    # Compute quantization parameters
+    for i in range(quantizer.stages):
+        iterator = iter(loader)
+        for j in range(num_iter):
+            input = torch.autograd.Variable(next(iterator)[idx], volatile=True).cuda()
+            model.forward(input)
+        if i < quantizer.stages - 1:
+            do_on_quantizable(lambda x: x.increment_stage())
 
 #############################
 ###      Convolutions     ###
@@ -177,26 +239,22 @@ def to_chwn_idx(dim):
 def from_chwn_idx(dim):
     return [dim-1] + list(range(0, dim-1))
 
-class ConvNd(nn.modules.conv._ConvNd):
+def transpose_pack(x, scale):
+    dim = len(x.size())
+    x.data = PackNd(x.data.permute(*from_chwn_idx(dim)).clone(), scale, 0.0)
+    x.data = x.data.permute(*to_chwn_idx(dim)).clone()
 
-    def __init__(self, dim, in_channels, out_channels, kernel_size, stride, padding, dilation, upsample, groups, bias, activation, alpha, scale, residual):
-        super(ConvNd, self).__init__(in_channels, out_channels, kernel_size, stride, padding, dilation, False, _single(0), groups, bias)
+class ConvNd(nn.modules.conv._ConvNd, Quantizable):
+
+    def __init__(self, dim, in_channels, out_channels, kernel_size, stride, padding, dilation, upsample, groups, bias, activation, alpha, residual):
+        nn.modules.conv._ConvNd.__init__(self, in_channels, out_channels, kernel_size, stride, padding, dilation, False, _single(0), groups, bias)
+        Quantizable.__init__(self, self.weight)
         self.activation = activation
         self.alpha = alpha
-        self.scale = scale
         self.upsample = upsample
-        self.quantizer = None
-        self.quantized_in = False
-        self.quantized_out = False
-        self.is_last_conv = False
-        self.is_first_conv = False
         self.dim = dim
         self.weight.data = self.weight.data.permute(*to_chwn_idx(self.dim))
         self.residual = residual
-
-
-    def set_quantizer(self, quantizer):
-        self.quantizer = quantizer
 
     def forward(self, x, z = None):
         # Cropping
@@ -212,60 +270,51 @@ class ConvNd(nn.modules.conv._ConvNd):
         y = ConvNdFunction(self.activation, self.alpha, self.scale, pad=self.padding, strides=self.stride, upsample=self.upsample, crop=crop, quantized_in=self.quantized_in, quantized_out = self.quantized_out, residual = self.residual)\
                           (x, self.weight, bias, torch.autograd.Variable() if z is None else z)
         # Quantize if requested
-        if self.quantizer:
-            self.scale, self.weight, self.quantized_in, self.quantized_out = self.quantizer.quantize(self.weight, x, y, z, self.is_first_conv, self.is_last_conv)
-            self.quantizer.module_of.update({id(y): self})
-            self.quantizer = None
+        Quantizable.update(self, x, y, z)
         return y
 
 
 # 1D Conv
 class Conv1d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1., 1.], residual = None):
-        super(Conv1d, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), _single(upsample), groups, bias, activation, alpha, scale, residual)
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., residual = None):
+        super(Conv1d, self).__init__(4, in_channels, out_channels, _single(kernel_size), _single(stride), _single(padding), _single(dilation), _single(upsample), groups, bias, activation, alpha, residual)
 
 # 2D Conv
 class Conv2d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1., 1.], residual = None):
-        super(Conv2d, self).__init__(4, in_channels, out_channels, _pair(kernel_size), _pair(stride), _pair(padding), _pair(dilation), _pair(upsample), groups, bias, activation, alpha, scale, residual)
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., residual = None):
+        super(Conv2d, self).__init__(4, in_channels, out_channels, _pair(kernel_size), _pair(stride), _pair(padding), _pair(dilation), _pair(upsample), groups, bias, activation, alpha, residual)
 
 # 3D Conv
 class Conv3d(ConvNd):
-    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., scale = [1., 1., 1., 1.], residual = None):
-        super(Conv3d, self).__init__(5, in_channels, out_channels, _triple(kernel_size), _triple(stride), _triple(padding), _triple(dilation), _triple(upsample), groups, bias, activation, alpha, scale, residual)
+    def __init__(self, in_channels, out_channels, kernel_size, stride=1, padding=0, dilation=1, upsample=1, groups=1, bias=True, activation = 'linear', alpha = 0., residual = None):
+        super(Conv3d, self).__init__(5, in_channels, out_channels, _triple(kernel_size), _triple(stride), _triple(padding), _triple(dilation), _triple(upsample), groups, bias, activation, alpha, residual)
 
 #############################
 ###      Pooling          ###
 #############################
 
-class PoolNd(nn.Module):
+class PoolNd(nn.Module, Quantizable):
 
-    def __init__(self, kernel_size, type, stride, padding, scale = [1., 1.]):
-        super(PoolNd, self).__init__()
-        self.quantizer = None
-        self.quantized_in = False
-        self.quantized_out = False
-        self.is_last_conv = False
-        self.is_first_conv = False
-        self.scale = scale
+    def __init__(self, kernel_size, type, stride, padding):
+        nn.Module.__init__(self)
+        Quantizable.__init__(self)
         self.kernel_size = kernel_size
         self.type = type
         self.stride = stride
         self.padding = padding
+        # Quantization
+        self.quantization_parameters = None
+        self.quantized_in = False
+        self.quantized_out = False
+        self.is_last_conv = False
+        self.is_first_conv = False
 
-    def set_quantizer(self, quantizer):
-        self.quantizer = quantizer
 
     def forward(self, x):
         # Computations
         y = PoolNdFunction(self.type, self.kernel_size, self.scale, pad=self.padding, strides=self.stride, quantized_in=self.quantized_in, quantized_out=self.quantized_out)(x)
         # Quantization if requested
-        if self.quantizer:
-            self.scale[0] = self.quantizer.history[id(x)]
-            self.scale[1] = self.quantizer.history[id(y)] = self.quantizer.history[id(x)]
-            self.quantizer = None
-            self.quantized_in = not self.is_first_conv
-            self.quantized_out = not self.is_last_conv
+        Quantizable.update(self, x, y, None)
         return y
 
 
@@ -301,29 +350,17 @@ class AvgPool3d(PoolNd):
 ###      Linear           ###
 #############################
 
-class Linear(nn.Linear):
+class Linear(nn.Linear, Quantizable):
 
-    def __init__(self, in_features, out_features, bias=True, scale = [1., 1., 1.]):
-        super(Linear, self).__init__(in_features, out_features, bias)
-        self.scale = scale
-        self.is_first_conv = False
-        self.is_last_conv = False
-        self.quantizer = None
-        self.quantized_in = False
-        self.quantized_out = False
+    def __init__(self, in_features, out_features, bias=True):
+        nn.Linear.__init__(self, in_features, out_features, bias)
+        Quantizable.__init__(self, self.weight)
         self.weight.data = self.weight.data.permute(1, 0)
-
-    def set_quantizer(self, quantizer):
-        self.quantizer = quantizer
 
     def forward(self, x):
         y = LinearFunction(self.scale, self.quantized_in, self.quantized_out)(x, self.weight, self.bias)
         # Quantize if requested
-        if self.quantizer:
-            scale, self.weight, self.quantized_in, self.quantized_out = self.quantizer.quantize(self.weight, x, y, None, self.is_first_conv, self.is_last_conv)
-            self.quantizer.module_of.update({id(y): self})
-            self.quantizer = None
-            self.scale = scale
+        Quantizable.update(self, x, y, None)
         return y
 
 
