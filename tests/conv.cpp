@@ -30,17 +30,6 @@
 namespace sc = isaac;
 namespace drv = isaac::driver;
 
-inline int32_t idx(int32_t x, int32_t y, int32_t z, int32_t w, int32_t u,
-                   int32_t /*s0*/, int32_t s1, int32_t s2, int32_t s3, int32_t s4)
-{ return u + w*s4 + z*s4*s3 + y*s4*s3*s2 + x*s4*s3*s2*s1; }
-
-template<class T> struct pack_increment{ enum{ VALUE = 1}; };
-template<> struct pack_increment<int>{ enum{ VALUE = 4}; };
-
-template <class T> T clamp(T x, T lo, T hi){
-  return std::max<T>(lo, std::min<T>(x, hi));
-}
-
 template<class DTYPE>
 inline void upsample(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
                      size_t N, size_t C, size_t D, size_t H, size_t W, size_t upsample_d, size_t upsample_h, size_t upsample_w){
@@ -56,51 +45,6 @@ inline void upsample(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
     }
 }
 
-
-template<class T> T pack(float* tmp, float scale);
-
-template<> float pack<float>(float* tmp, float scale)
-{ return tmp[0]*scale; }
-
-template<> int pack(float* tmp, float scale)
-{
-  int res = 0;
-  for(int i = 0; i < 4; i++){
-    int8_t clamped = std::round(clamp(tmp[i]*scale, (float)-128, (float)127));
-    res |= (clamped & 0xFF) << (8*i);
-  }
-  return res;
-}
-
-
-float* unpack(float* ptr, float value, float scale)
-{
-  *ptr = value/scale;
-  return ptr;
-}
-
-float* unpack(float* ptr, int value, float scale)
-{
-  for(int i = 0; i < 4; i++){
-    int shifted = (value >> (8*i) & 0xff);
-    ptr[i] = ((float)(*(int8_t*)(&shifted)))/scale;
-  }
-  return ptr;
-}
-
-
-inline float dot(float x, float y, float z)
-{ return std::fma(x, y, z); }
-
-inline int dot(int x, int y, int z){
-  int res = 0;
-  for(int i = 0; i < 4; i++){
-    int32_t a = ((x >> (8*i)) & 0x000000FF);
-    int32_t b = ((y >> (8*i)) & 0x000000FF);
-    res +=  (*(int8_t*)(&a)) * (*(int8_t*)(&b));
-  }
-  return res + z;
-}
 
 
 template<class IN_DTYPE, class OUT_DTYPE>

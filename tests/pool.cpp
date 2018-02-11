@@ -30,83 +30,6 @@
 namespace sc = isaac;
 namespace drv = isaac::driver;
 
-inline int32_t idx(int32_t x, int32_t y, int32_t z, int32_t w, int32_t u,
-                   int32_t /*s0*/, int32_t s1, int32_t s2, int32_t s3, int32_t s4)
-{ return u + w*s4 + z*s4*s3 + y*s4*s3*s2 + x*s4*s3*s2*s1; }
-
-template<class DTYPE>
-inline void to_cudnn(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
-                     size_t C, size_t D, size_t H, size_t W, size_t N){
-  for(size_t c = 0; c < C ; ++c)
-  for(size_t d = 0; d < D; ++d)
-  for(size_t h = 0; h < H; ++h)
-  for(size_t w = 0; w < W; ++w)
-  for(size_t n = 0; n < N; ++n)
-    out[idx(n, c, d, h, w, N, C, D, H, W)] = in[idx(c, d, h, w, n, C, D, H, W, N)];
-}
-
-template<class DTYPE>
-inline void from_cudnn(std::vector<DTYPE> const & in, std::vector<DTYPE>& out,
-                     size_t N, size_t K, size_t M, size_t P, size_t Q){
-    for(size_t k = 0; k < K ; ++k)
-    for(size_t m = 0; m < M; ++m)
-    for(size_t p = 0; p < P; ++p)
-    for(size_t q = 0; q < Q; ++q)
-    for(size_t n = 0; n < N; ++n)
-      out[idx(k, m, p, q, n, K, M, P, Q, N)] = in[idx(n, k, m, p, q, N, K, M, P, Q)];
-}
-
-template <class T> T clamp(T x, T lo, T hi){
-  return std::max<T>(lo, std::min<T>(x, hi));
-}
-
-float max(float x, float y)
-{
-  return std::max(x, y);
-}
-
-float add(float x, float y)
-{
-  return x + y;
-}
-
-float* unpack(float* ptr, float value, float scale)
-{
-  *ptr = value/scale;
-  return ptr;
-}
-
-float* unpack(float* ptr, int value, float scale)
-{
-  for(int i = 0; i < 4; i++){
-    int shifted = (value >> (8*i) & 0xff);
-    ptr[i] = ((float)(*(int8_t*)(&shifted)))/scale;
-  }
-  return ptr;
-}
-
-template<class T> T pack(float* tmp, float scale);
-
-template<> float pack<float>(float* tmp, float scale)
-{ return tmp[0]*scale; }
-
-template<> int pack(float* tmp, float scale)
-{
-  int res = 0;
-  for(int i = 0; i < 4; i++){
-    int8_t clamped = std::round(clamp(tmp[i]*scale, (float)-128, (float)127));
-    res |= (clamped & 0xFF) << (8*i);
-  }
-  return res;
-}
-
-
-template<class T> struct pack_increment{ enum{ VALUE = 1}; };
-template<> struct pack_increment<int32_t>{ enum{ VALUE = 4}; };
-
-template<class T> struct init_acc;
-template<> struct init_acc<float>{ static constexpr float value = -INFINITY; };
-template<> struct init_acc<int32_t>{ static constexpr int32_t value = 0x80808080; };
 
 template<class IN_DTYPE, class OUT_DTYPE>
 void cpp_pool(sc::PoolType pool_type,
@@ -127,7 +50,7 @@ void cpp_pool(sc::PoolType pool_type,
   int32_t Cin = C/PACK_IN;
   int32_t Cout = C/PACK_OUT;
 
-  std::function<IN_DTYPE(IN_DTYPE, IN_DTYPE)> accumulate = (pool_type == sc::MaxPool)?&max:&add;
+  std::function<IN_DTYPE(IN_DTYPE, IN_DTYPE)> accumulate = (pool_type == sc::MaxPool)?&max<IN_DTYPE>:&plus<IN_DTYPE>;
 
   float acc[PACK_IN];
   float unpacked[PACK_IN];
