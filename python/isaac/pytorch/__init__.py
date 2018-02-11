@@ -112,14 +112,13 @@ class Quantizer:
         if activations:
             mids = bins[:-1] + np.diff(bins)/2
             # Compute CDF
-            cdf = np.cumsum(x)
+            cdf = np.cumsum(x.numpy())
             cdf = cdf / cdf[-1]
             # Generate data
             n_samples = int(1e6)
             values = np.random.rand(n_samples)
             value_bins = np.searchsorted(cdf, values)
             data = torch.Tensor(mids[value_bins]).cuda()
-
 
 
         def loss(threshold):
@@ -169,7 +168,7 @@ class Quantizable:
     def increment_stage(self):
         if self.state['stage'] == 0:
             self.state['bins'] = np.linspace(self.state['min'], self.state['max'], 2049)
-            self.state['histogram'] = np.zeros(2048)
+            self.state['histogram'] = torch.zeros(2048).cpu()
         self.state['stage'] += 1
 
     def update(self, x, y, z):
@@ -182,7 +181,7 @@ class Quantizable:
             # Update histogram
             if self.state['quantized_out']:
                 y_abs = torch.abs(y.data)
-                self.state['histogram'] += np.histogram(y_abs.cpu().numpy(), bins = self.state['bins'])[0]
+                self.state['histogram'] += torch.histc(y_abs.cpu(), bins=2048, min=self.state['min'], max=self.state['max'])
 
 
         if self.state and self.state['stage'] == 2:

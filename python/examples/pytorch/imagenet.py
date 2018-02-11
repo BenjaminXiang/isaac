@@ -86,8 +86,9 @@ def validate(val_loader, model, criterion, progress_frequency = 10):
         end = time.time()
 
         if i % progress_frequency == 0 or i == len(val_loader) - 1:
-            print('Accuracy [{0}/{1}]: {2:.3} ({3:.3f})'.format(i, len(val_loader), top1.avg, top5.avg), end='\r', flush=True)
+            print('Accuracy [{0}/{1}]: {2:.4} ({3:.4})'.format(i, len(val_loader), top1.avg, top5.avg), end='\r', flush=True)
 
+    print('')
     return top1.avg, top5.avg
 
 
