@@ -50,7 +50,7 @@ class ConvNdFunction(Function):
                       self.strides[0], self.strides[1], self.strides[2], # Strides
                       bias, # Bias
                       self.activation, self.alpha, # Activation
-                      self.quantized_in, self.quantized_out, self.scale[0], self.scale[1], output_scales, self.scale[3], # Quantization
+                      self.scale[0], self.scale[1], output_scales, self.scale[3], # Quantization
                       self.residual, z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5]# Crop-cat
                       )
         return output
@@ -76,7 +76,6 @@ class PoolNdFunction(Function):
                       self.type,
                       self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
                       self.pad[0], self.pad[1], self.pad[2],
-                      self.quantized_in, self.quantized_out,
                       self.scale[0], self.scale[1],
                       self.strides[0], self.strides[1], self.strides[2])
         return output
@@ -97,7 +96,6 @@ class LinearFunction(Function):
         output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
         self.function(input, weight, output, bias,
                       self.alpha, self.beta,
-                      self.quantized_in, self.quantized_out,
                       self.scale[0], self.scale[1], self.scale[2])
         return output
 
