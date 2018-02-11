@@ -260,7 +260,7 @@ void benchmark_gemm(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::driver::Buffer B(ctx, K*N*dtsize);
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::GEMM(device, stream, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, NULL, (sc::templates::GEMM*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::GEMM(device, stream, dtype, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, alpha, A, B, beta, C, 1., 1., 1., NULL, (sc::templates::GEMM*)generator); }, [&](){ stream.synchronize(); }, device));
   if(sc::driver::dispatch::cublasinit()){
     cublasGemmAlgo_t fastest;
     sc::driver::cublasGemm(dtype, stream, cuAT, cuBT, M, N, K, alpha, A, lda, B, ldb, beta, C, ldc, &fastest);
@@ -315,7 +315,7 @@ void benchmark_pool(Metric const & metric, sc::driver::Context& ctx, sc::driver:
   sc::driver::Buffer I(ctx, K*D*H*W*N*dtsize);
 
   std::vector<double> times;
-  times.push_back(bench([&](){ sc::POOL(device, stream, dtype, sc::MaxPool, K, M, P, Q, N, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, O, (sc::templates::Pool*)generator); }, [&](){ stream.synchronize(); }, device));
+  times.push_back(bench([&](){ sc::POOL(device, stream, dtype, dtype, sc::MaxPool, K, M, P, Q, N, T, R, S, D, H, W, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, I, O, 1., 1., (sc::templates::Pool*)generator); }, [&](){ stream.synchronize(); }, device));
   if(sc::driver::dispatch::cudnninit())
     times.push_back(bench([&](){ sc::driver::cudnnPool(dtype, stream, D, H, W, N, K, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, alpha, I, beta, O); }, [&](){ stream.synchronize();  }, device));
   print_results(times, {str(N), str(K), str(M), str(P), str(Q),  str(T), str(R), str(S)}, metric.cmp(), [&](double tsec){ return metric.pool(M, P, Q, K, N, T, R, S, tsec);});
@@ -441,7 +441,7 @@ void search_gemm(int32_t M, int32_t N, int32_t K, sc::IsaacOperation_t AT, sc::I
   double best = 0;
 
   loop_nest<sc::param_t>({rv, rl, rl, rl, rs, r1, rs, rl, rl, rl, rl, r1, rr, rr}, [&](std::vector<sc::param_t> const & x){
-    isaac::templates::GEMM generator(dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
+    isaac::templates::GEMM generator(dtype, dtype, AT, BT, M, N, K, offa, lda, offb, ldb, offc, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]);
     // Compile
     try{
       std::string src = generator.dump(ctx.device(), "gemm");
@@ -544,11 +544,11 @@ int main(int argc, char* argv[]){
     }
     if(gemm->has("kernel")){
       auto x = gemm->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::GEMM(dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]));
+      generator.reset(new sc::templates::GEMM(dtype, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13]));
     }
     else{
       sc::runtime::GEMMProfile* profile = (sc::runtime::GEMMProfile*)sc::runtime::database.at({device.architecture(), sc::runtime::GEMM}).get();
-      generator.reset(new sc::templates::GEMM(profile->predict(stream, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc)));
+      generator.reset(new sc::templates::GEMM(profile->predict(stream, dtype, dtype, AT, BT, M, N, K, 0, lda, 0, ldb, 0, ldc)));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);
@@ -622,10 +622,10 @@ int main(int argc, char* argv[]){
 
     if(pool->has("kernel")){
       auto x = pool->get<std::vector<size_t>>("kernel");
-      generator.reset(new sc::templates::Pool(dtype, sc::MaxPool, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3]));
+      generator.reset(new sc::templates::Pool(dtype, dtype, sc::MaxPool, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w, x[0], x[1], x[2], x[3]));
     }
     else{
-      generator.reset(new sc::templates::Pool(dtype, sc::MaxPool, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w));
+      generator.reset(new sc::templates::Pool(dtype, dtype, sc::MaxPool, K, D, H, W, N, M, P, Q, T, R, S, pad_d, pad_h, pad_w, stride_d, stride_h, stride_w));
     }
     if(options->has("dump"))
       dump_source(device, *generator, dump, name);
