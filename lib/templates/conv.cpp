@@ -60,7 +60,7 @@ Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, par
   pad_d_(pad_d), pad_h_(pad_h), pad_w_(pad_w),
   stride_d_(stride_d), stride_h_(stride_h), stride_w_(stride_w),
   upsample_d_(upsample_d), upsample_h_(upsample_h), upsample_w_(upsample_w),
-  vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(gridz)
+  vec_(vec), bc0_(bc0), bc1_(bc1), cs0_(cs0), cs1_(cs1), u_(u), us_(u), zs_(1), bz_(bz), gridz_(1)
 {
     // Handle packed layouts
     size_t vect_c = (in_dtype_==INT8X4_TYPE)?4:1;
@@ -1478,7 +1478,6 @@ void Conv::enqueue(driver::Kernel& kernel, driver::Stream& stream,
 
   // Enqueue
   size_t idx = 0;
-
   kernel.setArg(idx++, I);
   kernel.setArg(idx++, F);
   for(size_t i = 0; i < num_outputs_; i++)

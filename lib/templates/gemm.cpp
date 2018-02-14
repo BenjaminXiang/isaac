@@ -763,8 +763,6 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
   iss << format("  .reg .pred %spin;") << std::endl;
   iss << format("  .reg .u32 %lock;") << std::endl;
   iss << format("  .reg .u64 %pc<{}>;", cs1_) << std::endl;
-
-
   iss << format("  mad.lo.u32 %offc0, %id0, {}, %bid0;", vec_) << std::endl;
   for(size_t m = 0; m < cs0_; m++)
     iss << format("  add.u32 %offc0_{}, %offc0, {};", m, m/vec_*vec_*bc0_ + m % vec_) << std::endl;
@@ -879,32 +877,33 @@ void GEMM::enqueue(driver::Kernel &kernel, driver::Stream &queue, const scalar& 
     locks_pool.insert(std::make_pair(queue, driver::Buffer(queue.context(), 64*64*4)));
   driver::Buffer& locks = locks_pool.at(queue);
 
-  //Arguments
-  kernel.setArg(0, M_);
-  kernel.setArg(1, N_);
-  kernel.setArg(2, K_);
+  // Enqueue
+  size_t idx = 0;
+  kernel.setArg(idx++, M_);
+  kernel.setArg(idx++, N_);
+  kernel.setArg(idx++, K_);
   // C
-  kernel.setArg(3, C);
-  kernel.setArg(4, ldc_);
-  kernel.setArg(5, offc_);
-  kernel.setArg(6, size_of(in_dtype_), alpha.data());
+  kernel.setArg(idx++, C);
+  kernel.setArg(idx++, ldc_);
+  kernel.setArg(idx++, offc_);
+  kernel.setArg(idx++, size_of(in_dtype_), alpha.data());
   // A
-  kernel.setArg(7, A);
-  kernel.setArg(8, lda_);
-  kernel.setArg(9, offa_);
+  kernel.setArg(idx++, A);
+  kernel.setArg(idx++, lda_);
+  kernel.setArg(idx++, offa_);
   // B
-  kernel.setArg(10, B);
-  kernel.setArg(11, ldb_);
-  kernel.setArg(12, offb_);
-  kernel.setArg(13, size_of(in_dtype_), beta.data());
-  kernel.setArg(14, bound);
+  kernel.setArg(idx++, B);
+  kernel.setArg(idx++, ldb_);
+  kernel.setArg(idx++, offb_);
+  kernel.setArg(idx++, size_of(in_dtype_), beta.data());
+  kernel.setArg(idx++, bound);
   // Locks
-  kernel.setArg(15, locks);
+  kernel.setArg(idx++, locks);
   // Scales
-  kernel.setArg(16, (float)1/(a_scale*b_scale));
-  kernel.setArg(17, c_scale);
+  kernel.setArg(idx++, (float)1/(a_scale*b_scale));
+  kernel.setArg(idx++, c_scale);
   // Bias
-  kernel.setArg(18, bias?*bias:(uint64_t)0);
+  kernel.setArg(idx++, bias?*bias:(uint64_t)0);
 
 //  std::cout << gridM << " " << gridN << " " << std::endl;
   //Launch

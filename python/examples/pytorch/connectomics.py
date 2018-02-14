@@ -3,7 +3,9 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from em.model.unet import unet3D_m1
+from em.model.deploy import unet3D_m1, unet3D_m2
+from em.model.io import convert_state_dict
+
 import numpy as np
 import copy
 import isaac.pytorch.models
@@ -12,19 +14,11 @@ import timeit
 import h5py
 from builtins import object
 import argparse
+import re
+import collections
 
 def convert(legacy):
     result = isaac.pytorch.models.UNet().cuda()
-
-    # Reorder indices because new state dict has upsample-upconv interleaved
-    depth = legacy.depth
-    ndown = 4*(depth + 1)
-    reorder = list(range(ndown))
-    for i in range(depth):
-        upsamples = list(range(ndown + i*3 + 1, ndown + i*3 + 3))
-        upconvs = list(range(ndown + depth*3 + i*4, ndown + depth*3 + i*4 + 4))
-        reorder +=  upsamples + upconvs
-    reorder += [ndown + 7*depth, ndown + 7*depth + 1]
 
     # Copy in proper order
     legacy_keys = list(legacy.state_dict().keys())
@@ -32,13 +26,20 @@ def convert(legacy):
     legacy_dict = legacy.state_dict()
     result_dict = result.state_dict()
 
-    for i, j in enumerate(reorder):
-        weights = legacy_dict[legacy_keys[j]].clone()
+    print(legacy_keys)
+    print(result_keys)
+
+    # Don't copy up-sampling weight
+    pattern = re.compile("upS\.[0-9]\.0.weight")
+    legacy_keys = [x for x in legacy_keys if not pattern.match(x)]
+
+    for i, j in zip(result_keys, legacy_keys):
+        weights = legacy_dict[j].clone()
         # Transpose weights if necessary
         if(len(weights.size()) > 1):
             weights = weights.permute(1, 2, 3, 4, 0)
         # Copy weights
-        result_dict[result_keys[i]] = weights
+        result_dict[i] = weights
     result.load_state_dict(result_dict)
 
     return result
@@ -78,16 +79,22 @@ if __name__ == '__main__':
 
     # Load data
     T = np.array(h5py.File(args.data, 'r')['main']).astype(np.float32)/255
-    dataset = DataIterator((31, 204, 204), T)
+    dataset = DataIterator((18, 160, 160), T)
     iterator = iter(dataset)
 
     # Build models
-    unet_ref = unet3D_m1().cuda()
-    unet_ref.load_state_dict(torch.load(args.weights)['state_dict'])
+    unet_ref = unet3D_m2().cuda()
+    state_dict = torch.load(args.weights)['state_dict']
+    state_dict = collections.OrderedDict([(x.replace('module.', ''), y) for x, y in state_dict.items()])
+    unet_ref.load_state_dict(state_dict)
+    unet_ref.eval()
+    unet_sc = isaac.pytorch.models.UNet().cuda()
 
     # Quantize
     print('Quantizing... ', end='', flush=True)
-    unet_sc = convert(unet_ref)
+    pattern = re.compile("upS\.[0-9]\.0.weight")
+    filter = lambda x: not pattern.match(x)
+    isaac.pytorch.convert(unet_sc, state_dict, filter)
     isaac.pytorch.quantize(unet_sc, iterator, args.calibration_batches)
     print('')
 
@@ -102,7 +109,7 @@ if __name__ == '__main__':
 
     # Evaluate
     print('Error: ', end='', flush=True)
-    errors = np.zeros(128)
+    errors = np.zeros(10)
     for n in range(errors.size):
         X = Variable(next(iterator)[0], volatile=True).cuda()
         y_ref = unet_ref(X)

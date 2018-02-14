@@ -83,52 +83,6 @@ class ResNet(nn.Module):
         return x
 
 
-
-def convert(model, reference):
-    reference_dict = reference
-    batch_norm_keys = [x for x in reference_dict.keys() if any([s in x for s in ('downsample.1', 'bn')])]
-    reference_keys = [x for x in reference_dict.keys() if x not in batch_norm_keys]
-    result_dict = model.state_dict()
-    result_keys = [x for x in result_dict.keys() if 'bias' not in x] + ['fc.bias']
-    extract = lambda x: x.data if isinstance(x, torch.autograd.Variable) else x
-
-    # Copy weights
-    for i_key, j_key in zip(result_keys, reference_keys):
-        weights = extract(reference_dict[j_key]).clone()
-        # Transpose weights if necessary
-        if(len(weights.size()) == 2):
-            weights = weights.permute(1, 0)
-        if(len(weights.size()) == 4):
-            weights = weights.permute(1, 2, 3, 0)
-        result_dict[i_key] = weights
-
-    # Fold Batch Normalization
-    conv_name = lambda x: x.replace('bn', 'conv') if 'bn' in x else x.replace('downsample.1', 'downsample')
-    batch_norm_keys = list(set(['.'.join(x.split('.')[:-1]) for x in batch_norm_keys]))
-    conv_keys = map(conv_name, batch_norm_keys)
-    for x, y in zip(conv_keys, batch_norm_keys):
-        eps = 1e-5
-        # Extract scales, mean, variance
-        beta = extract(reference_dict['{}.bias'.format(y)]).cuda()
-        gamma = extract(reference_dict['{}.weight'.format(y)]).cuda()
-        mean = extract(reference_dict['{}.running_mean'.format(y)]).cuda()
-        var = extract(reference_dict['{}.running_var'.format(y)]).cuda()
-        alpha = gamma / torch.sqrt(var + eps)
-        # Adjust conv weights/bias
-        conv_bias = result_dict['{}.bias'.format(x)]
-        conv_weight = result_dict['{}.weight'.format(x)]
-        conv_bias = conv_bias*alpha + (beta - mean*alpha)
-        for i in range(len(alpha)):
-            conv_weight[:,:,:,i] *= alpha[i]
-        # Write back to dictionnary
-        result_dict['{}.bias'.format(x)] = conv_bias
-        result_dict['{}.weight'.format(x)] = conv_weight
-
-    # Write back state dict
-    model.load_state_dict(result_dict)
-
-
-
 def resnet(name, **kwargs):
     pretrained_urls = {
         'resnet18': 'https://download.pytorch.org/models/resnet18-5c106cde.pth',
@@ -155,5 +109,5 @@ def resnet(name, **kwargs):
     }
 
     model = ResNet(blocks[name], layers[name], **kwargs).cuda()
-    convert(model, model_zoo.load_url(pretrained_urls[name]))
+    sc.convert(model, model_zoo.load_url(pretrained_urls[name]))
     return model
