@@ -88,14 +88,15 @@ if __name__ == '__main__':
     state_dict = collections.OrderedDict([(x.replace('module.', ''), y) for x, y in state_dict.items()])
     unet_ref.load_state_dict(state_dict)
     unet_ref.eval()
-    unet_sc = isaac.pytorch.models.UNet().cuda()
+
 
     # Quantize
     print('Quantizing... ', end='', flush=True)
     pattern = re.compile("upS\.[0-9]\.0.weight")
     filter = lambda x: not pattern.match(x)
+    unet_sc = isaac.pytorch.models.UNet().cuda()
     isaac.pytorch.convert(unet_sc, state_dict, filter)
-    isaac.pytorch.quantize(unet_sc, iterator, args.calibration_batches)
+    #isaac.pytorch.quantize(unet_sc, iterator, args.calibration_batches)
     print('')
 
     # Benchmark

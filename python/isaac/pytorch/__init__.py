@@ -461,7 +461,10 @@ def convert(model, reference, filter = lambda x: True):
         conv_weight = result_dict['{}.weight'.format(x)]
         conv_bias = conv_bias*alpha + (beta - mean*alpha)
         for i in range(len(alpha)):
-            conv_weight[:,:,:,:,i] *= alpha[i]
+            if(len(conv_weight.size())==4):
+                conv_weight[:,:,:,i] *= alpha[i]
+            if(len(conv_weight.size())==5):
+                conv_weight[:,:,:,:,i] *= alpha[i]
         # Write back to dictionnary
         result_dict['{}.bias'.format(x)] = conv_bias
         result_dict['{}.weight'.format(x)] = conv_weight
