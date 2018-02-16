@@ -30,6 +30,7 @@ inline isaac::ActivationType get_sc_activation(const std::string & activation){
     if(activation == "relu") return isaac::ReLU;
     if(activation == "linear") return isaac::Linear;
     if(activation == "sigmoid") return isaac::Sigmoid;
+    if(activation == "elu") return isaac::ELU;
     throw std::runtime_error("Unknown activation function");
 }
 

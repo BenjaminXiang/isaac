@@ -83,7 +83,7 @@ if __name__ == '__main__':
     iterator = iter(dataset)
 
     # Build models
-    unet_ref = unet3D_m2().cuda()
+    unet_ref = unet3D_m2(has_relu = 1).cuda()
     state_dict = torch.load(args.weights)['state_dict']
     state_dict = collections.OrderedDict([(x.replace('module.', ''), y) for x, y in state_dict.items()])
     unet_ref.load_state_dict(state_dict)
@@ -94,7 +94,7 @@ if __name__ == '__main__':
     print('Quantizing... ', end='', flush=True)
     pattern = re.compile("upS\.[0-9]\.0.weight")
     filter = lambda x: not pattern.match(x)
-    unet_sc = isaac.pytorch.models.UNet().cuda()
+    unet_sc = isaac.pytorch.models.UNet(relu_type='elu', relu_slope=1.).cuda()
     isaac.pytorch.convert(unet_sc, state_dict, filter)
     isaac.pytorch.quantize(unet_sc, iterator, args.calibration_batches)
     print('')

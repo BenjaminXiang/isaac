@@ -33,11 +33,12 @@ class ResidualBlock(nn.Module):
 
 class UNet(nn.Module):
 
-    def __init__(self, in_num=1, out_num=3, filters=[1,28,36,48,64,80], relu_slope=0., residual = 'add', BasicBlock = ResidualBlock):
+    def __init__(self, in_num=1, out_num=3, filters=[1,28,36,48,64,80], relu_slope=0., relu_type='relu', residual = 'add', BasicBlock = ResidualBlock):
         super(UNet, self).__init__()
         dim = 3
 
         # Attributes
+        self.relu_type = relu_type
         self.relu_slope = relu_slope
         self.filters = filters
         self.depth = len(filters) - 1
@@ -45,8 +46,8 @@ class UNet(nn.Module):
         self.out_num = out_num
 
         # Downward convolutions
-        first = sc.ConvType[dim](filters[0], filters[1], kernel_size = (1, 5, 5), padding = (0, 2, 2), bias = True, activation = 'relu', alpha = relu_slope)
-        DownBlock = lambda in_num, out_num: BasicBlock(in_num, out_num, True, 'relu', relu_slope)
+        first = sc.ConvType[dim](filters[0], filters[1], kernel_size = (1, 5, 5), padding = (0, 2, 2), bias = True, activation = relu_type, alpha = relu_slope)
+        DownBlock = lambda in_num, out_num: BasicBlock(in_num, out_num, True, relu_type, relu_slope)
         self.down_conv = nn.ModuleList([first] + [DownBlock(filters[x], filters[x+1]) for x in range(1, self.depth)])
 
         # Downsample
@@ -59,7 +60,7 @@ class UNet(nn.Module):
 
         # Upward convolution
         expand = 2 if residual=='cat' else 1
-        UpBlock = lambda in_num, out_num: BasicBlock(in_num, out_num, True, 'relu', relu_slope)
+        UpBlock = lambda in_num, out_num: BasicBlock(in_num, out_num, True, relu_type, relu_slope)
         self.up_conv = [UpBlock(expand*filters[x-1], filters[x-1]) for x in range(self.depth, 2, -1)]
         self.up_conv += [sc.ConvType[dim](filters[1], out_num, (1, 5, 5), padding = (0, 2, 2), bias=True, activation='sigmoid', alpha=0)]
         self.up_conv = nn.ModuleList(self.up_conv)

@@ -531,6 +531,33 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   /*         GENERATE STORE_COL FUNCTION          */
   /* -------------------------------------------- */
 
+  if(activation_ == Sigmoid || activation_ == ELU){
+    iss << ".func (.reg .f32 %retval) exp(.param .f32 _x){" << std::endl;
+    iss << "  .reg .f32 %f<15>;" << std::endl;
+    iss << "  .reg .pred %p1, %p2;" << std::endl;
+    iss << "  ld.param.f32 %f3, [_x];" << std::endl;
+    iss << "  mul.f32 	%f4, %f3, 0f3FB8AA3B;" << std::endl;
+    iss << "  cvt.rzi.f32.f32	%f5, %f4;" << std::endl;
+    iss << "  mov.f32 	%f6, 0fBF317200;" << std::endl;
+    iss << "  fma.rn.f32 	%f7, %f5, %f6, %f3;" << std::endl;
+    iss << "  mov.f32 	%f8, 0fB5BFBE8E;" << std::endl;
+    iss << "  fma.rn.f32 	%f9, %f5, %f8, %f7;" << std::endl;
+    iss << "  mul.f32 	%f2, %f9, 0f3FB8AA3B;" << std::endl;
+    iss << "  // inline asm" << std::endl;
+    iss << "  ex2.approx.ftz.f32 %f1,%f2;" << std::endl;
+    iss << "  // inline asm" << std::endl;
+    iss << "  add.f32 	%f10, %f5, 0f00000000;" << std::endl;
+    iss << "  ex2.approx.f32 	%f11, %f10;" << std::endl;
+    iss << "  mul.f32 	%f12, %f1, %f11;" << std::endl;
+    iss << "  setp.lt.f32	%p1, %f3, 0fC2D20000;" << std::endl;
+    iss << "  selp.f32	%f13, 0f00000000, %f12, %p1;" << std::endl;
+    iss << "  setp.gt.f32	%p2, %f3, 0f42D20000;" << std::endl;
+    iss << "  selp.f32	%retval, 0f7F800000, %f13, %p2;" << std::endl;
+    iss << "  ret;" << std::endl;
+    iss << "}" << std::endl;
+  }
+
+
   auto make_store_col = [&](std::string const & name, ResidualType residual_type){
       iss << ".func " << name << "(.reg .b64 %po, .reg .b32 %Cs0";
       for(size_t i = 0; i < cs0_; i++)
@@ -615,16 +642,23 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
           }
 
           if(residual_type_ == AddResidual){
-            if(activation_ == ReLU){
+            if(activation_ == ReLU || activation_ == ELU){
               iss << std::endl;
               iss << "  /* ---------------------------- */" << std::endl;
-              iss << "  /* ------------ ReLU ---------- */" << std::endl;
+              iss << "  /* --------- Rectifier -------- */" << std::endl;
               iss << "  /* ---------------------------- */" << std::endl;
-              iss << "  .reg .b32 %leakage;" << std::endl;
+              iss << "  .reg .b32 %leakage, %arg;" << std::endl;
               for(size_t j = 0; j < vect_k ; j++)
               for(size_t i = 0 ; i < cs0_ ; i+=vec_)
               for(size_t s = 0; s < vec_; ++s){
-                iss << format("  mul.f32 %leakage, %rc{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
+                if(activation_ == ReLU)
+                  iss << format("  mul.f32 %leakage, %rc{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
+                else{
+                    iss << format("  mov.f32 %arg, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
+                    iss << format("  call (%leakage), exp, (%arg);") << std::endl;
+                    iss << format("  sub.f32 %leakage, %leakage, 1.;") << std::endl;
+                    iss << format("  mul.f32 %leakage, %leakage, %alpha;", i, j, vs[s]) << std::endl;
+                }
                 iss << format("  slct.f32.f32 %rc{0}_{1}{2}, %rc{0}_{1}{2}, %leakage, %rc{0}_{1}{2};", i, j, vs[s]) << std::endl;
               }
             }
@@ -677,33 +711,6 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
 
   /* --------------------------------------------------- */
 
-
-
-  if(activation_ == Sigmoid){
-    iss << ".func (.reg .f32 %retval) exp(.param .f32 _x){" << std::endl;
-    iss << "  .reg .f32 %f<15>;" << std::endl;
-    iss << "  .reg .pred %p1, %p2;" << std::endl;
-    iss << "  ld.param.f32 %f3, [_x];" << std::endl;
-    iss << "  mul.f32 	%f4, %f3, 0f3FB8AA3B;" << std::endl;
-    iss << "  cvt.rzi.f32.f32	%f5, %f4;" << std::endl;
-    iss << "  mov.f32 	%f6, 0fBF317200;" << std::endl;
-    iss << "  fma.rn.f32 	%f7, %f5, %f6, %f3;" << std::endl;
-    iss << "  mov.f32 	%f8, 0fB5BFBE8E;" << std::endl;
-    iss << "  fma.rn.f32 	%f9, %f5, %f8, %f7;" << std::endl;
-    iss << "  mul.f32 	%f2, %f9, 0f3FB8AA3B;" << std::endl;
-    iss << "  // inline asm" << std::endl;
-    iss << "  ex2.approx.ftz.f32 %f1,%f2;" << std::endl;
-    iss << "  // inline asm" << std::endl;
-    iss << "  add.f32 	%f10, %f5, 0f00000000;" << std::endl;
-    iss << "  ex2.approx.f32 	%f11, %f10;" << std::endl;
-    iss << "  mul.f32 	%f12, %f1, %f11;" << std::endl;
-    iss << "  setp.lt.f32	%p1, %f3, 0fC2D20000;" << std::endl;
-    iss << "  selp.f32	%f13, 0f00000000, %f12, %p1;" << std::endl;
-    iss << "  setp.gt.f32	%p2, %f3, 0f42D20000;" << std::endl;
-    iss << "  selp.f32	%retval, 0f7F800000, %f13, %p2;" << std::endl;
-    iss << "  ret;" << std::endl;
-    iss << "}" << std::endl;
-  }
 
 
   iss << ".entry " << name << "(" << std::endl
@@ -1207,16 +1214,23 @@ std::string Conv::dump(drv::Device const & device, std::string const & name){
   iss << "  .reg .b32 %alpha;" << std::endl;
   iss << "  ld.param.b32 %alpha, [_alpha];" << std::endl;
   if(residual_type_ != AddResidual){
-      if(activation_ == ReLU){
+      if(activation_ == ReLU || activation_ == ELU){
         iss << std::endl;
         iss << "  /* ---------------------------- */" << std::endl;
-        iss << "  /* ------------ ReLU ---------- */" << std::endl;
+        iss << "  /* --------- Rectifier -------- */" << std::endl;
         iss << "  /* ---------------------------- */" << std::endl;
-        iss << "  .reg .b32 %leakage;" << std::endl;
+        iss << "  .reg .b32 %leakage, %arg;" << std::endl;
         for(size_t j = 0; j < cs1_ ; j++)
         for(size_t i = 0 ; i < cs0_ ; i+=vec_)
         for(size_t s = 0; s < vec_; ++s){
-          iss << format("  mul.f32 %leakage, %rc0_{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
+          if(activation_ == ReLU)
+            iss << format("  mul.f32 %leakage, %rc0_{0}_{1}{2}, %alpha;", i, j, vs[s]) << std::endl;
+          else{
+              iss << format("  mov.f32 %arg, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
+              iss << format("  call (%leakage), exp, (%arg);") << std::endl;
+              iss << format("  sub.f32 %leakage, %leakage, 1.;") << std::endl;
+              iss << format("  mul.f32 %leakage, %leakage, %alpha;", i, j, vs[s]) << std::endl;
+          }
           iss << format("  slct.f32.f32 %rc0_{0}_{1}{2}, %rc0_{0}_{1}{2}, %leakage, %rc0_{0}_{1}{2};", i, j, vs[s]) << std::endl;
         }
       }
