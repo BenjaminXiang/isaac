@@ -412,20 +412,22 @@ MaxPoolType = {1:MaxPool1d, 2:MaxPool2d, 3:MaxPool3d}
 AvgPoolType = {1:AvgPool1d, 2:AvgPool2d, 3:AvgPool3d}
 
 def convert(model, reference, filter = lambda x: True):
-    reference_dict = reference
-    reference_keys = list(reference_dict.keys())
-    result_dict = model.state_dict()
-    result_keys = list(result_dict.keys())
+    # Helpers
+    extract = lambda x: x.data if isinstance(x, torch.autograd.Variable) else x
 
-    # Filter out batch normalization layers
-    target_keys = [x for x in reference_keys if filter(x)]
-    batch_norm_layers = ['.'.join(x.split('.')[:-1]) for x in target_keys if '.running_mean' in x]
+    # Copy all non-BatchNorm related parameters
+    reference_dict = reference
+    reference_keys = [x for x in reference_dict.keys() if filter(x)]
+    batch_norm_layers = ['.'.join(x.split('.')[:-1]) for x in reference_keys if '.running_mean' in x]
     batch_norm_keys = [x + '.running_mean' for x in batch_norm_layers]
     batch_norm_keys += [x + '.running_var' for x in batch_norm_layers]
     batch_norm_keys += [x + '.weight' for x in batch_norm_layers]
     batch_norm_keys += [x + '.bias' for x in batch_norm_layers]
-    target_keys = [x for x in target_keys if x not in batch_norm_keys]
+    target_keys = [x for x in reference_keys if x not in batch_norm_keys]
 
+
+    result_dict = model.state_dict()
+    result_keys = list(result_dict.keys())
     # Handle biases added in result to deal with BatchNorm
     batch_norm_idx = [next(i for i, x in enumerate(reference_keys) if bn in x) for bn in batch_norm_layers]
     batch_norm_idx = np.array([target_keys.index(reference_keys[i - 1]) for i in batch_norm_idx])
@@ -434,8 +436,7 @@ def convert(model, reference, filter = lambda x: True):
     to_ignore = set([x + '.bias' for x in conv_keys])
     result_keys = [x for x in result_keys if x not in to_ignore]
 
-    # Copy weights
-    extract = lambda x: x.data if isinstance(x, torch.autograd.Variable) else x
+
     for i_key, j_key in zip(result_keys, target_keys):
         weights = extract(reference_dict[j_key]).clone()
         # Transpose weights if necessary
@@ -448,8 +449,13 @@ def convert(model, reference, filter = lambda x: True):
         result_dict[i_key] = weights
 
     # Fold Batch Normalization
+    batch_norm_idx = [next(i for i, x in enumerate(reference_keys) if bn in x) for bn in batch_norm_layers]
+    batch_norm_idx = np.array([target_keys.index(reference_keys[i - 1]) for i in batch_norm_idx])
+    batch_norm_idx += np.arange(len(batch_norm_idx))
+    conv_keys = ['.'.join(list(result_dict.keys())[i].split('.')[:-1]) for i in batch_norm_idx]
+
     for x, y in zip(conv_keys, batch_norm_layers):
-        eps = 1e-7
+        eps = 1e-5
         # Extract scales, mean, variance
         beta = extract(reference_dict['{}.bias'.format(y)]).cuda()
         gamma = extract(reference_dict['{}.weight'.format(y)]).cuda()
@@ -471,3 +477,4 @@ def convert(model, reference, filter = lambda x: True):
 
     # Write back state dict
     model.load_state_dict(result_dict)
+

@@ -96,7 +96,7 @@ if __name__ == '__main__':
     filter = lambda x: not pattern.match(x)
     unet_sc = isaac.pytorch.models.UNet().cuda()
     isaac.pytorch.convert(unet_sc, state_dict, filter)
-    #isaac.pytorch.quantize(unet_sc, iterator, args.calibration_batches)
+    isaac.pytorch.quantize(unet_sc, iterator, args.calibration_batches)
     print('')
 
     # Benchmark
