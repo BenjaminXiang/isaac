@@ -361,48 +361,6 @@ class Linear(nn.Linear, Quantizable):
         return y
 
 
-
-#############################
-###  PyTorch Equivalent   ###
-#############################
-
-def ConvBiasActivation(in_num, out_num, kernel_size, bias, activation, alpha):
-    dim = len(kernel_size)
-    Type = [nn.Conv1d, nn.Conv2d, nn.Conv3d][dim - 1]
-    conv = Type(in_num, out_num, kernel_size = kernel_size, padding=0, stride=1, bias = bias)
-    if activation == 'relu':
-        act = nn.LeakyReLU(alpha)
-    if activation == 'sigmoid':
-        act = nn.Sigmoid()
-    if activation == 'linear':
-        return nn.Sequential(conv)
-    return nn.Sequential(conv, act)
-
-
-class UpConvCropCat(nn.Module):
-
-    def __init__(self, strides, in_num, out_num, residual):
-        super(UpConvCropCat, self).__init__()
-        self.upsample = nn.ConvTranspose3d(in_num, in_num, strides, strides, groups = in_num, bias = False)
-        self.upsample.weight.data.fill_(1.0)
-        self.upsample.weight.requires_grad = False
-        self.conv_bias_relu = ConvBiasActivation(in_num, out_num, (1, 1, 1), bias = True, activation = 'linear', alpha = 1)
-        self.residual = residual
-
-
-    def forward(self, x, z):
-        x = self.upsample(x)
-        x = self.conv_bias_relu(x)
-        offset = [(z.size()[i]-x.size()[i])//2 for i in range(2,z.dim())]
-        z_crop = z[:,:,offset[0]:offset[0]+x.size(2),
-                       offset[1]:offset[1]+x.size(3),
-                       offset[2]:offset[2]+x.size(4)]
-        if self.residual == 'cat':
-            return torch.cat([x, z_crop], 1)
-        if self.residual == 'add':
-            return x + z_crop
-
-
 #############################
 ###     Helpers           ###
 #############################
