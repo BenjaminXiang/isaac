@@ -36,8 +36,9 @@ def main():
 
     # Build models
     print('Quantizing... ', end='', flush=True)
-    resnet_ref = torchvision.models.__dict__[args.arch](pretrained=True).cuda()
-    resnet_ref.eval()
+    #resnet_ref = torchvision.models.__dict__[args.arch](pretrained=True).cuda()
+    #resnet_ref.eval()
+    resnet_ref = isaac.pytorch.models.resnet(args.arch)
     resnet_sc = isaac.pytorch.models.resnet(args.arch)
     isaac.pytorch.quantize(resnet_sc, val_loader, args.calibration_batches)
     print('')
@@ -48,13 +49,13 @@ def main():
     input = torch.autograd.Variable(input, volatile=True).cuda()
     y_ref = resnet_ref(input)
     y_sc = resnet_sc(input)
-    t_sc = [x for x in timeit.repeat(lambda: (resnet_sc(input), torch.cuda.synchronize()), repeat=4, number=1)]
-    t_ref = [x for x in timeit.repeat(lambda: (resnet_ref(input), torch.cuda.synchronize()), repeat=4, number=1)]
+    t_sc = [x for x in timeit.repeat(lambda: (resnet_sc(input), torch.cuda.synchronize()), repeat=10, number=1)]
+    t_ref = [x for x in timeit.repeat(lambda: (resnet_ref(input), torch.cuda.synchronize()), repeat=10, number=1)]
     print('{:.2f} Image/s (Isaac) vs. {:.2f} Image/s (PyTorch)'.format(input.size()[0]/min(t_sc), input.size()[0]/min(t_ref)))
 
     # Accuracy
-    criterion = nn.CrossEntropyLoss().cuda()
-    validate(val_loader, resnet_sc, criterion)
+    #criterion = nn.CrossEntropyLoss().cuda()
+    #validate(val_loader, resnet_sc, criterion)
 
 
 def validate(val_loader, model, criterion, progress_frequency = 10):

@@ -47,21 +47,25 @@ def convert(legacy):
 
 class DataIterator(object):
 
-    def __init__(self, tile, data):
+    def __init__(self, batch_size, tile, data):
         self.current = [0, 0, 0]
         self.tile = tile
         self.sizes = data.shape
+        self.batch_size = batch_size
         self.data = torch.Tensor(data.reshape(1, 1, *self.sizes)).cuda()
 
     def __iter__(self):
         return self
 
     def __next__(self):
-        i = np.random.randint(0, self.sizes[0] - self.tile[0])
-        j = np.random.randint(0, self.sizes[1] - self.tile[1])
-        k = np.random.randint(0, self.sizes[2] - self.tile[2])
-        result = self.data[:, :, i:i+self.tile[0], j:j+self.tile[1], k:k+self.tile[2]]
-        return result.clone(),
+        results = []
+        for batch in range(args.batch_size):
+            i = np.random.randint(0, self.sizes[0] - self.tile[0])
+            j = np.random.randint(0, self.sizes[1] - self.tile[1])
+            k = np.random.randint(0, self.sizes[2] - self.tile[2])
+            results += [self.data[:, :, i:i+self.tile[0], j:j+self.tile[1], k:k+self.tile[2]].clone()]
+        results = torch.cat(results, dim=0)
+        return results,
 
 
 if __name__ == '__main__':
@@ -79,11 +83,11 @@ if __name__ == '__main__':
 
     # Load data
     T = np.array(h5py.File(args.data, 'r')['main']).astype(np.float32)/255
-    dataset = DataIterator((18, 160, 160), T)
+    dataset = DataIterator(args.batch_size, (18, 160, 160), T)
     iterator = iter(dataset)
 
     # Build models
-    unet_ref = unet3D_m2(has_relu = 1).cuda()
+    unet_ref = unet3D_m2().cuda()
     state_dict = torch.load(args.weights)['state_dict']
     state_dict = collections.OrderedDict([(x.replace('module.', ''), y) for x, y in state_dict.items()])
     unet_ref.load_state_dict(state_dict)
@@ -94,19 +98,21 @@ if __name__ == '__main__':
     print('Quantizing... ', end='', flush=True)
     pattern = re.compile("upS\.[0-9]\.0.weight")
     filter = lambda x: not pattern.match(x)
-    unet_sc = isaac.pytorch.models.UNet(relu_type='elu', relu_slope=1.).cuda()
-    isaac.pytorch.convert(unet_sc, state_dict, filter)
-    isaac.pytorch.quantize(unet_sc, iterator, args.calibration_batches)
+    unet_sc_int8 = isaac.pytorch.models.UNet(relu_type='relu', relu_slope=0.).cuda()
+    unet_sc_fp32 = isaac.pytorch.models.UNet(relu_type='relu', relu_slope=0.).cuda()
+    isaac.pytorch.convert(unet_sc_fp32, state_dict, filter)
+    isaac.pytorch.convert(unet_sc_int8, state_dict, filter)
+    isaac.pytorch.quantize(unet_sc_int8, iterator, args.calibration_batches)
     print('')
 
     # Benchmark
     print('Performance: ', end='', flush=True)
     X = Variable(next(iterator)[0], volatile=True).cuda()
-    y_sc = unet_sc(X)
+    y_sc = unet_sc_int8(X)
     Nvoxels = np.prod(y_sc.size()[2:])
-    t_sc = [x for x in timeit.repeat(lambda: (unet_sc(X), torch.cuda.synchronize()), repeat=10, number=1)]
-    t_ref = [x for x in timeit.repeat(lambda: (unet_ref(X), torch.cuda.synchronize()), repeat=10, number=1)]
-    print('{:.2f} Mvox/s (Isaac) ; {:.2f} Mvox/s (PyTorch)'.format(Nvoxels/min(t_sc)*1e-6, Nvoxels/min(t_ref)*1e-6))
+    t_sc = [x for x in timeit.repeat(lambda: (unet_sc_int8(X), torch.cuda.synchronize()), repeat=10, number=1)]
+    t_ref = [x for x in timeit.repeat(lambda: (unet_sc_fp32(X), torch.cuda.synchronize()), repeat=10, number=1)]
+    print('{:.2f} Mvox/s (Isaac) ; {:.2f} Mvox/s (PyTorch)'.format(Nvoxels/min(t_sc)*args.batch_size*1e-6, Nvoxels/min(t_ref)*args.batch_size*1e-6))
 
     # Evaluate
     print('Error: ', end='', flush=True)
@@ -114,7 +120,7 @@ if __name__ == '__main__':
     for n in range(errors.size):
         X = Variable(next(iterator)[0], volatile=True).cuda()
         y_ref = unet_ref(X)
-        y_sc = unet_sc(X)
+        y_sc = unet_sc_int8(X)
         errors[n] = torch.norm(y_ref - y_sc).data[0]/torch.norm(y_ref).data[0]
     print('{:.4f} [+- {:.4f}]'.format(np.mean(errors), np.std(errors)))
 

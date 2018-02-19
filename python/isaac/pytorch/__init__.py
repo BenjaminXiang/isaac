@@ -133,6 +133,51 @@ class Quantizer:
             c = (a + b) / 2
             (a, b) = (c, b) if loss(c) > loss(c + epsilon) else (a, c)
             previous = c
+
+
+#        # Debug
+#        if activations:
+#            import matplotlib.pyplot as plt
+#            f, axs = plt.subplots(3, 1, sharex=True, sharey=True)
+
+#            bins = np.linspace(data.min(), data.max(), 192)
+#            bins[0] = 0
+#            bins[1] = 1e-6
+#            width = np.diff(bins)
+#            center = (bins[:-1] + bins[1:]) / 2
+#            # Original distribution
+#            original, _ = np.histogram(data.cpu().numpy(), bins=bins, density=True)
+#            original[0] = 0
+
+#            # Quantized distributions
+#            handles = [None]
+#            for ax, (threshold, color, alpha) in  zip(axs, [(1.5, 'blue', 0.3),
+#                                                                   (c, 'indianred', 0.3),
+#                                                                   (data.max(), 'green', 0.3)]):
+#                scale = 127. / threshold
+#                quantized = torch.clamp(data * scale, -128, 127)
+#                quantized = torch.round(quantized) / scale
+#                hist, _ = np.histogram(quantized.cpu().numpy(), bins=bins, density=True)
+#                hist[0] = 0
+#                bars = ax.bar(center, hist, align='center', width=width, alpha = alpha, color=color, label=r'Quantized ($\tau={:.2f}$)'.format(threshold))
+#                ax.axvline(x=threshold, linestyle='--', color=color)
+#                ax.text(threshold + (bins[0] - bins[-1])*0.02, 2., 'Saturate', rotation=90, fontsize=18)
+#                line = ax.plot(center, original, color='black', linewidth=1., label='Original')
+#                ax.set_xlim(left=np.min(bins), right=np.max(bins))
+#                handles[0] = line[0]
+#                handles += [bars]
+#                for tick in ax.xaxis.get_major_ticks():
+#                    tick.label.set_fontsize(18)
+#                for tick in ax.yaxis.get_major_ticks():
+#                    tick.label.set_fontsize(18)
+
+#            # Show
+#            f.text(0.5, 0.04, 'Activation value', ha='center', fontsize=18)
+#            f.text(0.07, 0.5, 'Probability density', va='center', rotation='vertical', fontsize=18)
+#            plt.legend(handles=handles,loc="upper center", bbox_to_anchor=[0.5, 3.8],
+#                       ncol=4, shadow=True, fancybox=True, fontsize=18)
+#            plt.show()
+
         return 127. / c
 
     def __init__(self, stages = 3):
@@ -170,6 +215,9 @@ class Quantizable:
         self.state['stage'] += 1
 
     def update(self, x, y, z):
+        if self.state == None:
+            return
+
         if self.state and self.state['stage'] == 0:
             y_abs = torch.abs(y.data)
             self.state['min'] = min(self.state['min'], torch.min(y_abs))

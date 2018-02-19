@@ -691,7 +691,7 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     size_t bmn = nthreads/bz_;
     iss << ".reg .u32 %readk, %writek, %rid_mn, %rid_k;" << std::endl;
     for(size_t mn = 0; mn < cl0*cl1; mn += bmn)
-      iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", ab_dtype, mn) << std::endl;
+      iss << format("  .reg .{0} %rrk{1}_0, %rrk{1}_1;", sub_dtype, mn) << std::endl;
 
     iss << format("  mad.lo.u32 %writek, %idz, {}, %shared;", cl0*cl1*in_dtsize) << std::endl;
     iss << format("  mad.lo.u32 %writek, %idmn, {}, %writek;", cs0_*cs1_*in_dtsize) << std::endl;
@@ -713,10 +713,10 @@ std::string GEMM::dump(drv::Device const & device, std::string const & name){
     for(size_t c = bz_/2; c > 0; c /=2){
       iss << format("  setp.lt.u32 %predr, %rid_k, {};", c) << std::endl;
       for(size_t mn = 0; mn < cl0*cl1; mn += bmn){
-        iss << format("  @%predr ld.shared.{} %rrk{}_0, [%readk + {}];", ab_dtype, mn, (mn)*in_dtsize) << std::endl;
-        iss << format("  @%predr ld.shared.{} %rrk{}_1, [%readk + {}];", ab_dtype, mn, (mn + c*cl0*cl1)*in_dtsize) << std::endl;
+        iss << format("  @%predr ld.shared.{} %rrk{}_0, [%readk + {}];", sub_dtype, mn, (mn)*in_dtsize) << std::endl;
+        iss << format("  @%predr ld.shared.{} %rrk{}_1, [%readk + {}];", sub_dtype, mn, (mn + c*cl0*cl1)*in_dtsize) << std::endl;
         iss << format("  @%predr add.{0} %rrk{1}_0, %rrk{1}_0, %rrk{1}_1;", sub_dtype, mn) << std::endl;
-        iss << format("  @%predr st.shared.{} [%readk + {}], %rrk{}_0;", ab_dtype, mn*in_dtsize, mn) << std::endl;
+        iss << format("  @%predr st.shared.{} [%readk + {}], %rrk{}_0;", sub_dtype, mn*in_dtsize, mn) << std::endl;
       }
       iss << "  bar.sync 0;" << std::endl;
     }
