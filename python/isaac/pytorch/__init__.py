@@ -19,7 +19,7 @@ def PackNd(input, alpha, beta):
 
 
 class ConvNdFunction(Function):
-    def __init__(self, activation, alpha, scale, pad = (0, 0, 0), strides = (1, 1, 1), upsample = (1, 1, 1), crop = (0, 0, 0, 0, 0, 0), quantized_in = False, quantized_out = False, residual = ''):
+    def __init__(self, activation, alpha, scale, pad = (0, 0, 0), strides = (1, 1, 1), upsample = (1, 1, 1), crop = (0, 0, 0, 0, 0, 0), quantized_in = False, quantized_out = False, residual = '', optimization_level = 1):
         self.activation = activation.encode('utf-8')
         self.residual = '' if residual is None else residual
         self.residual = self.residual.encode('utf-8')
@@ -36,6 +36,7 @@ class ConvNdFunction(Function):
                           (True, False): isaac_conv_nd_int_float,
                           (False, True): isaac_conv_nd_float_int,
                           (True, True): isaac_conv_nd_int_int}[quantized_in, quantized_out]
+        self.optimization_level = optimization_level
 
     def forward(self, input, weight, bias, z):
         z = z if z.size() else self.ffi.NULL
@@ -51,12 +52,13 @@ class ConvNdFunction(Function):
                       bias, # Bias
                       self.activation, self.alpha, # Activation
                       self.scale[0], self.scale[1], output_scales, self.scale[3], # Quantization
-                      self.residual, z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5]# Crop-cat
+                      self.residual, z, self.crop[0], self.crop[1], self.crop[2], self.crop[3], self.crop[4], self.crop[5], # Crop-cat
+                      self.optimization_level
                       )
         return output
 
 class PoolNdFunction(Function):
-    def __init__(self, type, kernel_size, scale, pad = (0, 0, 0), strides = (1, 1, 1), quantized_in = False, quantized_out = False):
+    def __init__(self, type, kernel_size, scale, pad = (0, 0, 0), strides = (1, 1, 1), quantized_in = False, quantized_out = False, optimization_level = 1):
         self.kernel_size = pad_left(3, kernel_size, 1)
         self.pad = pad_left(3, pad, 0)
         self.strides = pad_left(3, strides, 1)
@@ -68,6 +70,7 @@ class PoolNdFunction(Function):
         self.function = {(False, False): isaac_pool_nd_float_float,
                           (True, False): isaac_pool_nd_int_float,
                           (True, True): isaac_pool_nd_int_int}[quantized_in, quantized_out]
+        self.optimization_level = optimization_level
 
     def forward(self, input):
         output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
@@ -77,12 +80,13 @@ class PoolNdFunction(Function):
                       self.kernel_size[0], self.kernel_size[1], self.kernel_size[2],
                       self.pad[0], self.pad[1], self.pad[2],
                       self.scale[0], self.scale[1],
-                      self.strides[0], self.strides[1], self.strides[2])
+                      self.strides[0], self.strides[1], self.strides[2],
+                      self.optimization_level)
         return output
 
 class LinearFunction(Function):
 
-    def __init__(self, scale, quantized_in = False, quantized_out = False):
+    def __init__(self, scale, quantized_in = False, quantized_out = False, optimization_level = 1):
         self.alpha = 1.
         self.beta = 0.
         self.scale = scale
@@ -90,13 +94,15 @@ class LinearFunction(Function):
         self.quantized_out = quantized_out
         self.function = {(False, False): isaac_linear_float_float,
                           (True, False): isaac_linear_int_float}[self.quantized_in, self.quantized_out]
+        self.optimization_level = 1
 
 
     def forward(self, input, weight, bias):
         output = input.new().type(torch.cuda.IntTensor if self.quantized_out else torch.cuda.FloatTensor)
         self.function(input, weight, output, bias,
                       self.alpha, self.beta,
-                      self.scale[0], self.scale[1], self.scale[2])
+                      self.scale[0], self.scale[1], self.scale[2],
+                      self.optimization_level)
         return output
 
 #############################

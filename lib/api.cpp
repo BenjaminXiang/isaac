@@ -24,13 +24,19 @@
 
 namespace isaac{
 
+inline size_t num_re_evaluate(size_t optimization_level){
+    if(optimization_level <= 1)
+        return 1;
+    return 5*optimization_level;
+}
+
 void GEMM(driver::Device const &, driver::Stream & stream,
           DType in_dtype, DType out_dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
           param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc,
           scalar const & alpha, driver::Buffer const & A, driver::Buffer const & B, scalar const & beta, driver::Buffer& C,
           float a_scale, float b_scale, float c_scale,
           const driver::Buffer *bias,
-          templates::GEMM* generator)
+          templates::GEMM* generator, size_t optimization_level)
 {
   typedef std::tuple<driver::Stream, DType, DType, IsaacOperation_t, IsaacOperation_t, std::vector<param_t>> key_type;
   // Build the generator if necessary
@@ -41,7 +47,7 @@ void GEMM(driver::Device const &, driver::Stream & stream,
     IsaacOperation_t AT = std::get<3>(key), BT = std::get<4>(key);
     runtime::GEMMProfile* profile = (runtime::GEMMProfile*)runtime::database.at({stream.context().device().architecture(), runtime::GEMM}).get();
     std::vector<param_t> const & x = std::get<5>(key);
-    templates::GEMM result = profile->predict(stream, in_dtype, out_dtype, AT, BT, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8]);
+    templates::GEMM result = profile->predict(stream, in_dtype, out_dtype, AT, BT, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], num_re_evaluate(optimization_level));
     return std::make_shared<templates::GEMM>(result);
   });
 
@@ -70,7 +76,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
           ActivationType activation, float alpha,
           float iscale, float fscale, std::vector<float> const & oscale, float z_scale,
           ResidualType residual, param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, driver::Buffer const *Z,
-          templates::Conv* generator)
+          templates::Conv* generator, size_t optimization_level)
 {
   typedef std::tuple<driver::Stream, DType, DType, std::vector<param_t>> key_type;
   // Build the generator if necessary
@@ -80,7 +86,7 @@ void CONV(driver::Device const &, driver::Stream & stream,
     DType out_dtype = std::get<2>(key);
     std::vector<param_t> const & x = std::get<3>(key);
     runtime::ConvProfile* profile = (runtime::ConvProfile*)runtime::database.at({stream.context().device().architecture(), runtime::CONV}).get();
-    templates::Conv result = profile->predict(stream, in_dtype, out_dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], (ResidualType)x[23], x[24], x[25], x[26], x[27], x[28], x[29], x[30]);
+    templates::Conv result = profile->predict(stream, in_dtype, out_dtype, x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], x[18], x[19], x[20], (ActivationType)x[21], x[22], (ResidualType)x[23], x[24], x[25], x[26], x[27], x[28], x[29], x[30], num_re_evaluate(optimization_level));
     return std::make_shared<templates::Conv>(result);
   });
 
@@ -104,7 +110,7 @@ void POOL(driver::Device const &, driver::Stream & stream,
           param_t D, param_t H, param_t W, param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w,
           driver::Buffer const & I, driver::Buffer& O,
           float iscale, float oscale,
-          templates::Pool* generator)
+          templates::Pool* generator, size_t optimization_level)
 {
   typedef std::tuple<driver::Stream, DType, DType, std::vector<param_t>> key_type;
   // Build the generator if necessary
@@ -114,7 +120,7 @@ void POOL(driver::Device const &, driver::Stream & stream,
     DType in_dtype = std::get<1>(key);
     DType out_dtype = std::get<2>(key);
     std::vector<param_t> const & x = std::get<3>(key);
-    templates::Pool result = profile->predict(stream, in_dtype, out_dtype, (PoolType)x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17]);
+    templates::Pool result = profile->predict(stream, in_dtype, out_dtype, (PoolType)x[0], x[1], x[2], x[3], x[4], x[5], x[6], x[7], x[8], x[9], x[10], x[11], x[12], x[13], x[14], x[15], x[16], x[17], num_re_evaluate(optimization_level));
     return std::make_shared<templates::Pool>(result);
   });
   // Build the kernel

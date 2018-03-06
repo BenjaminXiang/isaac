@@ -122,21 +122,21 @@ public:
                           param_t stride_d, param_t stride_h, param_t stride_w,
                           param_t upsample_d, param_t upsample_h, param_t upsample_w,
                           ActivationType activation, size_t num_outputs,
-                          ResidualType residual, param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, size_t num_re_evaluate = 10);
+                          ResidualType residual, param_t Zk, param_t crop_z_m0, param_t crop_z_m1, param_t crop_z_p0, param_t crop_z_p1, param_t crop_z_q0, param_t crop_z_q1, size_t num_re_evaluate = 1);
 };
 
 class PoolProfile: public Profile{
 public:
   PoolProfile(u_char* data);
   templates::Pool predict(driver::Stream& stream, DType in_dtype, DType out_dtype, PoolType pool_type, param_t C, param_t D, param_t H, param_t W, param_t N, param_t M, param_t P, param_t Q, param_t T, param_t R, param_t S,
-                        param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate = 10);
+                        param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, size_t num_re_evaluate = 1);
 };
 
 class GEMMProfile: public Profile{
 public:
   GEMMProfile(u_char* data);
   templates::GEMM predict(driver::Stream& stream, DType in_dtype, DType out_dtype, IsaacOperation_t AT, IsaacOperation_t BT, param_t M, param_t N, param_t K,
-                          param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc, size_t num_re_evaluate = 10);
+                          param_t offa, param_t lda, param_t offb, param_t ldb, param_t offc, param_t ldc, size_t num_re_evaluate = 1);
 };
 
 //Database
