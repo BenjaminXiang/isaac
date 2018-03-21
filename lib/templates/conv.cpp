@@ -53,7 +53,7 @@ Conv::Conv(DType in_dtype, DType out_dtype, param_t C, param_t D, param_t H, par
            param_t pad_d, param_t pad_h, param_t pad_w, param_t stride_d, param_t stride_h, param_t stride_w, param_t upsample_d, param_t upsample_h, param_t upsample_w,
            ActivationType activation, size_t num_outputs,
            ResidualType residual_type, param_t Zk, param_t z_crop_m0, param_t z_crop_m1, param_t z_crop_p0, param_t z_crop_p1, param_t z_crop_q0, param_t z_crop_q1,
-           param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t gridz):
+           param_t vec, param_t bc0, param_t bc1, param_t cs0, param_t cs1, param_t u, param_t, param_t bz, param_t):
   in_dtype_(in_dtype), out_dtype_(out_dtype), activation_(activation), num_outputs_(num_outputs),
   residual_type_(residual_type), Zk_(Zk), z_crop_m0_(z_crop_m0), z_crop_m1_(z_crop_m1), z_crop_p0_(z_crop_p0), z_crop_p1_(z_crop_p1), z_crop_q0_(z_crop_q0), z_crop_q1_(z_crop_q1),
   C_(C), N_(N), K_(K), D_(D), H_(H), W_(W), M_(M), P_(P), Q_(Q), T_(T), R_(R), S_(S),
