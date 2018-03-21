@@ -56,6 +56,23 @@ void export_templates(py::module&& m){
       .value("OP_T", sc::IsaacOperation_t::ISAAC_OP_T)
       .export_values();
 
+  py::enum_<sc::ActivationType>(m, "activation")
+      .value("LINEAR", sc::ActivationType::Linear)
+      .value("RELU", sc::ActivationType::ReLU)
+      .value("ELU", sc::ActivationType::ELU)
+      .value("SIGMOID", sc::ActivationType::Sigmoid)
+      .export_values();
+
+  py::enum_<sc::ResidualType>(m, "residual")
+      .value("NO_RESIDUAL", sc::ResidualType::NoResidual)
+      .value("ADD_RESIDUAL", sc::ResidualType::AddResidual)
+      .value("CAT_RESIDUAL", sc::ResidualType::CatResidual)
+      .export_values();
+
+  py::enum_<sc::PoolType>(m, "pool")
+      .value("MAX_POOL", sc::PoolType::MaxPool)
+      .value("AVG_POOL", sc::PoolType::AvgPool)
+      .export_values();
 
   py::class_<tpt::GEMM>(m, "GEMM")
       .def(py::init<sc::DType,sc::DType,sc::IsaacOperation_t,sc::IsaacOperation_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,param_t,
